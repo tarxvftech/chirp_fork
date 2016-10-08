@@ -69,7 +69,7 @@ CROSS_MODES = [
 ]
 
 MODES = ["WFM", "FM", "NFM", "AM", "NAM", "DV", "USB", "LSB", "CW", "RTTY",
-         "DIG", "PKT", "NCW", "NCWR", "CWR", "P25", "Auto", "RTTYR",
+         "DIG", "PKT", "NCW", "NCWR", "CWR", "P25", "Auto", "RTTYR", "DMR",
          "FSK", "FSKR"]
 
 TONE_MODES = [
@@ -415,6 +415,8 @@ class Memory:
 
         if vals[10] == "DV":
             mem = DVMemory()
+        elif vals[10] == "DMR":
+            mem = DMRMemory()
         else:
             mem = Memory()
 
@@ -432,17 +434,33 @@ class Memory:
         self.name = vals[1]
 
         try:
-            self.freq = float(vals[2])
+            # TESTING this was not tested except for the md380 driver and my (mmcginty) DMR programmer
+            #
+            # I was getting bad frequencies when writing mems to csv, 
+            #   reading mems from csv, and to and from again.
+            # It seems to be from here, where we weren't actually parse_freq-ing!
+            # memory entries seem to be in hz, and this old code gives us, for 441.0 (mhz), 441 hz!
+            # 
+            # self.freq = float(vals[2])
+
+            # whereas this, seems to work properly and give us the value we expect elsewhere
+            self.freq = parse_freq( vals[2] )
+            # testing with my stuff seems to work, but it needs lots of eyes, 
+            #   because this lasted a long time without being fixed in chirp.
+            # Maybe I was using it wrong?
+            #
         except:
             raise errors.InvalidDataError("Frequency is not a valid number")
 
-        if vals[3].strip() in ["+", "-", ""]:
+        if vals[3].strip() in self._valid_map['duplex']: #["","+","-"]: 
             self.duplex = vals[3].strip()
         else:
             raise errors.InvalidDataError("Duplex is not +,-, or empty")
 
         try:
-            self.offset = float(vals[4])
+            # self.offset = float(vals[4])
+            # same as above for self.freq - am I the only one using this method?
+            self.offset = parse_freq( vals[4] )
         except:
             raise errors.InvalidDataError("Offset is not a valid number")
 
@@ -501,6 +519,108 @@ class Memory:
 
         return True
 
+
+class DMRMemory(Memory):
+    """A Memory with DMR attributes"""
+    txgroup = 0     #offset into contacts
+    rxgroup = 0     #offset into rxgrouplist
+    timeslot = 1    # 1 or 2, known as col TIMESLOT
+    colorcode = 0   # 0 up to 15, known as col COLORCODE
+    tags = ""
+    
+    def try_resolve(self,converterfn, val):
+        # print("Resolving ", val)
+        # print("resolving using", converterfn)
+        try:
+            return int( val ), None
+        except ValueError as e:
+            pass #print("try_resolve",e)
+        except Exception as e:
+            raise(e) #print(e)
+        returnme = converterfn(val)
+        # print("try_resolve", val, returnme)
+        return returnme
+
+    def resolve(self, radio):
+        """Resolve txgroup and rxgroup references given the current radio settings. Should be done as late as possible. Currently will silently fail!"""
+
+        try:
+            self.txgroup, c = self.try_resolve( radio.find_contact_by_name, self.txgroup )
+            # print(self.txgroup,c)
+        except Exception as e:
+            print("TXGroup resolve error",e)
+        try:
+            self.rxgroup, r = self.try_resolve( radio.find_rxgroup_by_name, self.rxgroup )
+            # print(self.rxgroup,r)
+        except Exception as e:
+            print("RXGroup resolve error",e)
+
+    def __str__(self):
+        string = Memory.__str__(self)
+        # string += " <t: %i, rxg: %i, ts: %i, cc: %i >" % (
+        string += " <t: %s, rxg: %s, ts: %i, cc: %i, t:%s>" % (
+                str(self.txgroup),
+                str(self.rxgroup),
+                self.timeslot,
+                self.colorcode,
+                self.tags
+                )
+
+        return string
+
+    def to_csv(self):
+        return [
+            "%i" % self.number,
+            "%s" % self.name,
+            format_freq(self.freq),
+            "%s" % self.duplex,
+            format_freq(self.offset),
+            "%s" % self.tmode,
+            "%.1f" % self.rtone,
+            "%.1f" % self.ctone,
+            "%03i" % self.dtcs,
+            "%s" % self.dtcs_polarity,
+            "%s" % self.mode,
+            "%.2f" % self.tuning_step,
+            "%s" % self.skip,
+            "%s" % self.comment,
+            "%i" % self.txgroup,
+            "%i" % self.rxgroup,
+            "%i" % self.timeslot,
+            "%i" % self.colorcode,
+            "%s" % self.tags,
+            ]
+
+    def really_from_csv(self, vals):
+        Memory.really_from_csv(self, vals)
+
+        try:
+            self.txgroup = vals[14].strip()
+        except Exception:
+            self.txgroup = -1
+        try:
+            self.rxgroup = vals[15].strip()
+        except Exception:
+            self.rxgroup = -1
+        try:
+            self.timeslot = int(vals[16].strip())
+        except Exception:
+            self.timeslot = 1
+
+        try:
+            self.colorcode = int(vals[17].strip())
+        except Exception:
+            self.colorcode = 0
+
+        try:
+            self.tags = vals[18].strip()
+            print("got tags: ", self.tags.split(":") )
+        except Exception as e:
+            print("tags find",e)
+            self.tags = ""
+
+        if self.name.strip().lower() in ['Empty','']:
+            self.empty = True
 
 class DVMemory(Memory):
     """A Memory with D-STAR attributes"""
@@ -1195,6 +1315,8 @@ class NetworkSourceRadio(Radio):
         """Fetch the source data from the network"""
         pass
 
+class DMRSupport:
+    pass
 
 class IcomDstarSupport:
     """Base interface for radios supporting Icom's D-STAR technology"""

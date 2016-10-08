@@ -476,7 +476,8 @@ of file.
             d.destroy()
 
     def cb_clonein(self, radio, emsg=None):
-        radio.pipe.close()
+        if radio.pipe is not None:
+            radio.pipe.close()
         reporting.report_model_usage(radio, "download", bool(emsg))
         if not emsg:
             self.do_open_live(radio, tempname="(" + _("Untitled") + ")")
@@ -486,7 +487,8 @@ of file.
             d.destroy()
 
     def cb_cloneout(self, radio, emsg=None):
-        radio.pipe.close()
+        if radio.pipe is not None:
+            radio.pipe.close()
         reporting.report_model_usage(radio, "upload", True)
         if emsg:
             d = inputdialog.ExceptionDialog(emsg)
@@ -675,20 +677,22 @@ of file.
 
         LOG.debug("User selected %s %s on port %s" %
                   (rclass.VENDOR, rclass.MODEL, settings.port))
+        if not (hasattr(rclass,'NO_SERIAL') and getattr(rclass,'NO_SERIAL')):
+            try:
+                ser = serial.Serial(port=settings.port,
+                                    baudrate=rclass.BAUD_RATE,
+                                    rtscts=rclass.HARDWARE_FLOW,
+                                    timeout=0.25)
+                ser.flushInput()
+            except serial.SerialException, e:
+                d = inputdialog.ExceptionDialog(e)
+                d.run()
+                d.destroy()
+                return
 
-        try:
-            ser = serial.Serial(port=settings.port,
-                                baudrate=rclass.BAUD_RATE,
-                                rtscts=rclass.HARDWARE_FLOW,
-                                timeout=0.25)
-            ser.flushInput()
-        except serial.SerialException, e:
-            d = inputdialog.ExceptionDialog(e)
-            d.run()
-            d.destroy()
-            return
-
-        radio = settings.radio_class(ser)
+            radio = settings.radio_class(ser)
+        else:
+            radio = settings.radio_class(None)
 
         fn = tempfile.mktemp()
         if isinstance(radio, chirp_common.CloneModeRadio):
@@ -704,6 +708,7 @@ of file.
 
         settings = clone.CloneSettings()
         settings.radio_class = radio.__class__
+        rclass = settings.radio_class
 
         d = clone.CloneSettingsDialog(settings, parent=self)
         settings = d.run()
@@ -721,23 +726,25 @@ of file.
             # User does not want to proceed with experimental driver
             return
 
-        try:
-            ser = serial.Serial(port=settings.port,
-                                baudrate=radio.BAUD_RATE,
-                                rtscts=radio.HARDWARE_FLOW,
-                                timeout=0.25)
-            ser.flushInput()
-        except serial.SerialException, e:
-            d = inputdialog.ExceptionDialog(e)
-            d.run()
-            d.destroy()
-            return
+        if not (hasattr(rclass,'NO_SERIAL') and getattr(rclass,'NO_SERIAL')):
+            try:
+                ser = serial.Serial(port=settings.port,
+                                    baudrate=radio.BAUD_RATE,
+                                    rtscts=radio.HARDWARE_FLOW,
+                                    timeout=0.25)
+                ser.flushInput()
+            except serial.SerialException, e:
+                d = inputdialog.ExceptionDialog(e)
+                d.run()
+                d.destroy()
+                return
 
         if prompts.display_pre_upload_prompt_before_opening_port is False:
             LOG.debug("Opening port before pre_upload prompt.")
             self._show_instructions(radio, prompts.pre_upload)
 
-        radio.set_pipe(ser)
+        if not (hasattr(rclass,'NO_SERIAL') and getattr(rclass,'NO_SERIAL')):
+            radio.set_pipe(ser)
 
         ct = clone.CloneThread(radio, "out", cb=self.cb_cloneout, parent=self)
         ct.start()

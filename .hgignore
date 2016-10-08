@@ -2,6 +2,12 @@
 .*\.pyc$
 .*\.orig$
 .*\.rej$
+.*.un~
+.*.swp
+*.pyc
+.git
+.hg
+.hg*
 dist
 build/bdist
 tools/cpep8.venv/

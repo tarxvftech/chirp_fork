@@ -146,6 +146,11 @@ class CSVRadio(chirp_common.FileBackedRadio, chirp_common.IcomDstarSupport):
                 mem = chirp_common.DVMemory()
         except OmittedHeaderError:
             pass
+        try:
+            if get_datum_by_header(headers, line, "Mode") == "DMR":
+                mem = chirp_common.DMRMemory()
+        except OmittedHeaderError:
+            pass
 
         for header in headers:
             try:

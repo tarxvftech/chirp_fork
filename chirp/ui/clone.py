@@ -232,8 +232,11 @@ class CloneThread(threading.Thread):
         self.__progw = cloneprog.CloneProg(parent=parent, cancel=self.cancel)
 
     def cancel(self):
-        self.__radio.pipe.close()
-        self.__cancelled = True
+        if self.__radio.pipe is None:
+            return #We are lying and have not cancelled anything
+        else:
+            self.__radio.pipe.close()
+            self.__cancelled = True
 
     def run(self):
         LOG.debug("Clone thread started")
@@ -257,7 +260,8 @@ class CloneThread(threading.Thread):
         gobject.idle_add(self.__progw.hide)
 
         # NB: Compulsory close of the radio's serial connection
-        self.__radio.pipe.close()
+        if self.__radio.pipe is not None:
+            self.__radio.pipe.close()
 
         LOG.debug("Clone thread ended")
 

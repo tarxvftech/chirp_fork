@@ -20,7 +20,7 @@ import logging
 
 from chirp import chirp_common, directory
 from chirp.drivers import generic_csv, generic_xml
-from chirp.ui import memedit, dstaredit, bankedit, common, importdialog
+from chirp.ui import memedit, dmredit, dstaredit, bankedit, common, importdialog
 from chirp.ui import inputdialog, reporting, settingsedit, radiobrowser, config
 
 LOG = logging.getLogger(__name__)
@@ -75,6 +75,8 @@ class EditorSet(gtk.VBox):
     def _make_device_editors(self, device, devrthread, index):
         if isinstance(device, chirp_common.IcomDstarSupport):
             memories = memedit.DstarMemoryEditor(devrthread)
+        elif isinstance(device, chirp_common.DMRSupport):
+            memories = memedit.DMRMemoryEditor(devrthread)
         else:
             memories = memedit.MemoryEditor(devrthread)
 
@@ -94,6 +96,14 @@ class EditorSet(gtk.VBox):
         self.editors["memedit%i" % index] = memories
 
         self._make_device_mapping_editors(device, devrthread, index)
+
+        if isinstance(device, chirp_common.DMRSupport):
+            editor = dmredit.DMREditor(devrthread)
+            self.tabs.append_page(editor.root, gtk.Label(_("DMR")))
+            editor.root.show()
+            editor.connect("changed", self.dmr_changed, memories)
+            editor.connect("changed", self.editor_changed)
+            self.editors["DMR"] = editor
 
         if isinstance(device, chirp_common.IcomDstarSupport):
             editor = dstaredit.DStarEditor(devrthread)
@@ -223,6 +233,11 @@ class EditorSet(gtk.VBox):
         memedit.set_urcall_list(dstared.editor_ucall.get_callsigns())
         memedit.set_repeater_list(dstared.editor_rcall.get_callsigns())
         memedit.prefill()
+
+    def dmr_changed(self, dmred, memedit):
+        print("dmr_changed method, not complete")
+        memedit.prefill()
+
 
     def editor_changed(self, target_editor=None):
         LOG.debug("%s changed" % target_editor)
