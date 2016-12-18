@@ -7,6 +7,59 @@ import json
 from chirp.chirp_common import Memory, DMRMemory, parse_freq 
 from collections import Counter
 
+us_state_abbrev = {
+    'Alabama': 'AL',
+    'Alaska': 'AK',
+    'Arizona': 'AZ',
+    'Arkansas': 'AR',
+    'California': 'CA',
+    'Colorado': 'CO',
+    'Connecticut': 'CT',
+    'Delaware': 'DE',
+    'Florida': 'FL',
+    'Georgia': 'GA',
+    'Hawaii': 'HI',
+    'Idaho': 'ID',
+    'Illinois': 'IL',
+    'Indiana': 'IN',
+    'Iowa': 'IA',
+    'Kansas': 'KS',
+    'Kentucky': 'KY',
+    'Louisiana': 'LA',
+    'Maine': 'ME',
+    'Maryland': 'MD',
+    'Massachusetts': 'MA',
+    'Michigan': 'MI',
+    'Minnesota': 'MN',
+    'Mississippi': 'MS',
+    'Missouri': 'MO',
+    'Montana': 'MT',
+    'Nebraska': 'NE',
+    'Nevada': 'NV',
+    'New Hampshire': 'NH',
+    'New Jersey': 'NJ',
+    'New Mexico': 'NM',
+    'New York': 'NY',
+    'North Carolina': 'NC',
+    'North Dakota': 'ND',
+    'Ohio': 'OH',
+    'Oklahoma': 'OK',
+    'Oregon': 'OR',
+    'Pennsylvania': 'PA',
+    'Rhode Island': 'RI',
+    'South Carolina': 'SC',
+    'South Dakota': 'SD',
+    'Tennessee': 'TN',
+    'Texas': 'TX',
+    'Utah': 'UT',
+    'Vermont': 'VT',
+    'Virginia': 'VA',
+    'Washington': 'WA',
+    'West Virginia': 'WV',
+    'Wisconsin': 'WI',
+    'Wyoming': 'WY',
+}
+
 class DMRDump( object ):
     # add http://www.nerepeaters.com/NERepeaters.php
     def __init__(self):
@@ -81,37 +134,59 @@ class DMRDump( object ):
                 else:
                     return s
 
-            def mem_per_timeslot(base, ts, rxg ):
+            def mem_per_timeslot(base, ts, rxg, rxg_txcontact=0 ):
                 r_rxg = get_rxgroup( rxg ) #resolved rxgroup, so we can access elements from it
                 t = base.dupe()
                 t.timeslot = ts
                 t.rxgroup = rxg
-                if not many:
-                    t.txgroup = r_rxg.cidxs[0]
-                else:
-                    raise NotImplementedError
+
+                t.txgroup = r_rxg.cidxs[ rxg_txcontact ]
 
                 #ideally bank names should remove at least 1 or two elements from the naming so 
                 # we can still have a full name based on the current zone and channel
+
                 try:
                     txgroupname = radio.contacts[t.txgroup].name
                 except:
                     txgroupname = t.txgroup
-                t.name = "%d-%s"%( 
-                        ts,
-                        truncate( r['city'], 13).capitalize(),
-                        # truncate( txgroupname, 5 ),
-                        # truncate( t.name, 5).upper(), 
+
+                def abbr(name):
+                    """return only the non lowercase characters in a string"""
+                    return ''.join( [ x for x in name if not (x >= 'a' and x <= 'z')])
+
+                t.name = "%s%d%s %s%s"%( 
+                        abbr(txgroupname), 
+                        ts, 
+                        t.name, 
+                        us_state_abbrev[r['state']],
+                        r['city'] 
                         )
+                # t.name = "%d-%s"%( 
+                        # ts,
+                        # truncate( r['city'], 13).capitalize(),
+                        # # truncate( txgroupname, 5 ),
+                        # # truncate( t.name, 5).upper(), 
+                        # )
                 return t
 
-            t1 = mem_per_timeslot( base, 1, ts1rxg )
-            print(t1)
-            t2 = mem_per_timeslot( base, 2, ts2rxg )
-            print(t2)
-
-            mems.append(t1)
-            mems.append(t2)
+            if not many:
+                t1 = mem_per_timeslot( base, 1, ts1rxg )
+                print(t1)
+                t2 = mem_per_timeslot( base, 2, ts2rxg )
+                print(t2)
+                mems.append(t1)
+                mems.append(t2)
+            else:
+                def addall(rxg, ts):
+                    r_rxg = get_rxgroup( rxg )
+                    for ci in range(len(r_rxg.cidxs)):
+                        print("GREPME: ", ci, r_rxg.cidxs[ci]);
+                        if r_rxg.cidxs[ ci ] != 0: 
+                            #0 should be simplex (sorry), so if a contact is zero.
+                            m = mem_per_timeslot( base, ts, rxg, ci)
+                            mems.append( m )
+                addall( ts1rxg , 1)
+                addall( ts2rxg , 2)
         
         print("Created %d mems"%(len(mems)))
         return mems
@@ -275,7 +350,7 @@ class DMRContactList( object ):
             callid = int(c['callid'])
             flags = int(c['flags'])
             ce = radio.contact( None, name, callid, flags)
-            # print(ce)
+            #print(ce)
             me.cl.append( ce )
         return me
 
@@ -410,7 +485,7 @@ class DMRRadio( object ):
         with open( basename + m.memoriesfn, "rb") as fh:
             for line in fh:
                 mem = Memory._from_csv( line )
-                # print(mem)
+                print(mem)
                 m.set_memory(mem)
             
         return m

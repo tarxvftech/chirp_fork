@@ -529,8 +529,8 @@ class DMRMemory(Memory):
     tags = ""
     
     def try_resolve(self,converterfn, val):
-        # print("Resolving ", val)
-        # print("resolving using", converterfn)
+        print("Resolving ", val)
+        print("resolving using", converterfn)
         try:
             return int( val ), None
         except ValueError as e:
@@ -538,20 +538,22 @@ class DMRMemory(Memory):
         except Exception as e:
             raise(e) #print(e)
         returnme = converterfn(val)
-        # print("try_resolve", val, returnme)
+        print("try_resolve", val, returnme)
         return returnme
 
     def resolve(self, radio):
         """Resolve txgroup and rxgroup references given the current radio settings. Should be done as late as possible. Currently will silently fail!"""
-
+        print("dmr memory resolve()")
         try:
+            print(self.txgroup)
             self.txgroup, c = self.try_resolve( radio.find_contact_by_name, self.txgroup )
-            # print(self.txgroup,c)
+            print(self.txgroup,c)
         except Exception as e:
             print("TXGroup resolve error",e)
         try:
+            print(self.rxgroup)
             self.rxgroup, r = self.try_resolve( radio.find_rxgroup_by_name, self.rxgroup )
-            # print(self.rxgroup,r)
+            print(self.rxgroup,r)
         except Exception as e:
             print("RXGroup resolve error",e)
 
