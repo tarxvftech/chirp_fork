@@ -5,7 +5,10 @@
 import re
 import sys
 import codecs
-import exceptions
+try:
+    import exceptions
+except:
+    pass
 
 
 class keyword(str):
