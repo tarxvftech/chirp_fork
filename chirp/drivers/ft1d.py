@@ -20,14 +20,15 @@ import logging
 
 from chirp.drivers import yaesu_clone
 from chirp import chirp_common, directory, bitwise
-from chirp.settings import RadioSettingGroup, RadioSetting, RadioSettings
-from chirp.settings import RadioSettingValueInteger, RadioSettingValueString
-from chirp.settings import RadioSettingValueList, RadioSettingValueBoolean
+from chirp.settings import RadioSettingGroup, RadioSetting, RadioSettings, \
+            RadioSettingValueInteger, RadioSettingValueString, \
+            RadioSettingValueList, RadioSettingValueBoolean, \
+            InvalidValueError
 from textwrap import dedent
 
 LOG = logging.getLogger(__name__)
 
-MEM_FORMAT = """
+MEM_SETTINGS_FORMAT = """
 #seekto 0x049a;
 struct {
   u8 vfo_a;
@@ -141,17 +142,21 @@ struct {
   u8 unknown[2];
   u8 name[16];
 } bank_info[24];
+"""
 
+MEM_FORMAT = """
 #seekto 0x2D4A;
 struct {
-  u8 unknown1;
+  u8 unknown0:2,
+     mode_alt:1,  // mode for FTM-3200D
+     unknown1:5;
   u8 mode:2,
      duplex:2,
      tune_step:4;
   bbcd freq[3];
   u8 power:2,
-     unknown2:4,
-     tone_mode:2;
+     unknown2:2,
+     tone_mode:4;
   u8 charsetbits[2];
   char label[16];
   bbcd offset[3];
@@ -160,7 +165,7 @@ struct {
   u8 unknown6:1,
      dcs:7;
   u8 unknown7[3];
-} memory[900];
+} memory[%d];
 
 #seekto 0x280A;
 struct {
@@ -170,8 +175,10 @@ struct {
      skip:1,
      used:1,
      valid:1;
-} flag[900];
+} flag[%d];
+"""
 
+MEM_APRS_FORMAT = """
 #seekto 0xbeca;
 struct {
   u8 rx_baud;
@@ -334,7 +341,33 @@ struct {
   char path_and_body[66];
   u8 unknown[70];
 } aprs_message_pkt[60];
+"""
 
+MEM_BACKTRACK_FORMAT = """
+#seekto 0xdf06;
+struct {
+  u8 status; // 01 full 08 empty
+  u8 reserved0; // 00
+  bbcd year; // 17
+  bbcd mon; // 06
+  bbcd day; // 01
+  u8 reserved1; // 06
+  bbcd hour; // 21
+  bbcd min; // xx
+  u8 reserved2; // 00
+  u8 reserved3; // 00
+  char NShemi[1];
+  char lat[3];
+  char lat_min[2];
+  char lat_dec_sec[4];
+  char WEhemi[1];
+  char lon[3];
+  char lon_min[2];
+  char lon_dec_sec[4];
+} backtrack[3];
+
+"""
+MEM_CHECKSUM_FORMAT = """
 #seekto 0x1FDC9;
 u8 checksum;
 """
@@ -500,11 +533,7 @@ class FT1BankModel(chirp_common.BankModel):
         return banks
 
 
-def _wipe_memory(mem):
-    mem.set_raw("\x00" * (mem.size() / 8))
-    mem.unknown1 = 0x05
-
-
+# Note: other radios like FTM3200Radio subclass this radio
 @directory.register
 class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
     """Yaesu FT1DR"""
@@ -517,7 +546,9 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
     _memsize = 130507
     _block_lengths = [10, 130497]
     _block_size = 32
-    _mem_params = (0xFECA,         # APRS beacon metadata address.
+    _mem_params = (900,            # size of memories array
+                   900,            # size of flags array
+                   0xFECA,         # APRS beacon metadata address.
                    60,             # Number of beacons stored.
                    0x1064A,        # APRS beacon content address.
                    134,            # Length of beacon data stored.
@@ -590,6 +621,9 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
     _DTMF_SPEED = ("50ms", "100ms")
     _DTMF_DELAY = ("50ms", "250ms", "450ms", "750ms", "1000ms")
     _MY_SYMBOL = ("/[ Person", "/b Bike", "/> Car", "User selected")
+    _BACKTRACK_STATUS = ("Valid", "Invalid")
+    _NS_HEMI = ("N", "S")
+    _WE_HEMI = ("W", "E")
 
     @classmethod
     def get_prompts(cls):
@@ -610,7 +644,9 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
         return rp
 
     def process_mmap(self):
-        self._memobj = bitwise.parse(MEM_FORMAT % self._mem_params, self._mmap)
+        mem_format = MEM_SETTINGS_FORMAT + MEM_FORMAT + MEM_APRS_FORMAT + \
+                MEM_BACKTRACK_FORMAT + MEM_CHECKSUM_FORMAT
+        self._memobj = bitwise.parse(mem_format % self._mem_params, self._mmap)
 
     def get_features(self):
         rf = chirp_common.RadioFeatures()
@@ -632,7 +668,8 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
         return rf
 
     def get_raw_memory(self, number):
-        return repr(self._memobj.memory[number])
+        return "\n".join([repr(self._memobj.memory[number - 1]),
+                          repr(self._memobj.flag[number - 1])])
 
     def _checksums(self):
         return [yaesu_clone.YaesuChecksum(0x064A, 0x06C8),
@@ -666,20 +703,52 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
         mem.freq = chirp_common.fix_rounded_step(int(_mem.freq) * 1000)
         mem.offset = int(_mem.offset) * 1000
         mem.rtone = mem.ctone = chirp_common.TONES[_mem.tone]
-        mem.tmode = TMODES[_mem.tone_mode]
+        self._get_tmode(mem, _mem)
         mem.duplex = DUPLEX[_mem.duplex]
         if mem.duplex == "split":
             mem.offset = chirp_common.fix_rounded_step(mem.offset)
-        mem.mode = MODES[_mem.mode]
+        mem.mode = self._decode_mode(_mem)
         mem.dtcs = chirp_common.DTCS_CODES[_mem.dcs]
         mem.tuning_step = STEPS[_mem.tune_step]
-        mem.power = POWER_LEVELS[3 - _mem.power]
+        mem.power = self._decode_power_level(_mem)
         mem.skip = flag.pskip and "P" or flag.skip and "S" or ""
 
-        charset = ''.join(CHARSET).ljust(256, '.')
-        mem.name = str(_mem.label).rstrip("\xFF").translate(charset)
+        mem.name = self._decode_label(_mem)
 
         return mem
+
+    def _decode_label(self, mem):
+        charset = ''.join(CHARSET).ljust(256, '.')
+        return str(mem.label).rstrip("\xFF").translate(charset)
+
+    def _encode_label(self, mem):
+        label = "".join([chr(CHARSET.index(x)) for x in mem.name.rstrip()])
+        return self._add_ff_pad(label, 16)
+
+    def _encode_charsetbits(self, mem):
+        # We only speak english here in chirpville
+        return [0x00, 0x00]
+
+    def _decode_power_level(self, mem):
+        return POWER_LEVELS[3 - mem.power]
+
+    def _encode_power_level(self, mem):
+        return 3 - POWER_LEVELS.index(mem.power)
+
+    def _decode_mode(self, mem):
+        return MODES[mem.mode]
+
+    def _encode_mode(self, mem):
+        return MODES.index(mem.mode)
+
+    def _get_tmode(self, mem, _mem):
+        mem.tmode = TMODES[_mem.tone_mode]
+
+    def _set_tmode(self, _mem, mem):
+        _mem.tone_mode = TMODES.index(mem.tmode)
+
+    def _set_mode(self, _mem, mem):
+        _mem.mode = self._encode_mode(mem)
 
     def _debank(self, mem):
         bm = self.get_bank_model()
@@ -693,7 +762,7 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
         self._debank(mem)
 
         if not mem.empty and not flag.valid:
-            _wipe_memory(_mem)
+            self._wipe_memory(_mem)
 
         if mem.empty and flag.valid and not flag.used:
             flag.valid = False
@@ -714,24 +783,27 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
         _mem.freq = int(mem.freq / 1000)
         _mem.offset = int(mem.offset / 1000)
         _mem.tone = chirp_common.TONES.index(mem.rtone)
-        _mem.tone_mode = TMODES.index(mem.tmode)
+        self._set_tmode(_mem, mem)
         _mem.duplex = DUPLEX.index(mem.duplex)
-        _mem.mode = MODES.index(mem.mode)
+        self._set_mode(_mem, mem)
         _mem.dcs = chirp_common.DTCS_CODES.index(mem.dtcs)
         _mem.tune_step = STEPS.index(mem.tuning_step)
         if mem.power:
-            _mem.power = 3 - POWER_LEVELS.index(mem.power)
+            _mem.power = self._encode_power_level(mem)
         else:
             _mem.power = 0
 
-        label = "".join([chr(CHARSET.index(x)) for x in mem.name.rstrip()])
-        _mem.label = self._add_ff_pad(label, 16)
-        # We only speak english here in chirpville
-        _mem.charsetbits[0] = 0x00
-        _mem.charsetbits[1] = 0x00
+        _mem.label = self._encode_label(mem)
+        charsetbits = self._encode_charsetbits(mem)
+        _mem.charsetbits[0], _mem.charsetbits[1] = charsetbits
 
         flag.skip = mem.skip == "S"
         flag.pskip = mem.skip == "P"
+
+    @classmethod
+    def _wipe_memory(cls, mem):
+        mem.set_raw("\x00" * (mem.size() / 8))
+        mem.unknown1 = 0x05
 
     def get_bank_model(self):
         return FT1BankModel(self)
@@ -1412,6 +1484,183 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
 
         return menu
 
+    def backtrack_ll_validate(self, number, min, max):
+        if str(number).lstrip('0').strip().isdigit() and \
+                int(str(number).lstrip('0')) <= max and \
+                int(str(number).lstrip('0')) >= min:
+            return True
+
+        return False
+
+    def backtrack_zero_pad(self, number, l):
+        number = str(number).strip()
+        while len(number) < l:
+            number = '0' + number
+
+        return str(number)
+
+    def _get_backtrack_settings(self):
+
+        menu = RadioSettingGroup("backtrack", "Backtrack")
+
+        for i in range(3):
+            prefix = ''
+            if i == 0:
+                prefix = "Star "
+            if i == 1:
+                prefix = "L1 "
+            if i == 2:
+                prefix = "L2 "
+
+            bt_idx = "backtrack[%d]" % i
+
+            bt = self._memobj.backtrack[i]
+
+            val = RadioSettingValueList(
+                self._BACKTRACK_STATUS,
+                self._BACKTRACK_STATUS[0 if bt.status == 1 else 1])
+            rs = RadioSetting(
+                    "%s.status" % bt_idx,
+                    prefix + "status", val)
+            rs.set_apply_callback(self.apply_backtrack_status, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and int(bt.year) < 100:
+                val = RadioSettingValueInteger(0, 99, bt.year)
+            else:
+                val = RadioSettingValueInteger(0, 99, 0)
+            rs = RadioSetting(
+                    "%s.year" % bt_idx,
+                    prefix + "year", val)
+            menu.append(rs)
+
+            if bt.status == 1 and int(bt.mon) <= 12:
+                val = RadioSettingValueInteger(0, 12, bt.mon)
+            else:
+                val = RadioSettingValueInteger(0, 12, 0)
+            rs = RadioSetting(
+                    "%s.mon" % bt_idx,
+                    prefix + "month", val)
+            menu.append(rs)
+
+            if bt.status == 1:
+                val = RadioSettingValueInteger(0, 31, bt.day)
+            else:
+                val = RadioSettingValueInteger(0, 31, 0)
+            rs = RadioSetting(
+                    "%s.day" % bt_idx,
+                    prefix + "day", val)
+            menu.append(rs)
+
+            if bt.status == 1:
+                val = RadioSettingValueInteger(0, 23, bt.hour)
+            else:
+                val = RadioSettingValueInteger(0, 23, 0)
+            rs = RadioSetting(
+                    "%s.hour" % bt_idx,
+                    prefix + "hour", val)
+            menu.append(rs)
+
+            if bt.status == 1:
+                val = RadioSettingValueInteger(0, 59, bt.min)
+            else:
+                val = RadioSettingValueInteger(0, 59, 0)
+            rs = RadioSetting(
+                    "%s.min" % bt_idx,
+                    prefix + "min", val)
+            menu.append(rs)
+
+            if bt.status == 1 and \
+                    (str(bt.NShemi) == 'N' or str(bt.NShemi) == 'S'):
+                val = RadioSettingValueString(0, 1, str(bt.NShemi))
+            else:
+                val = RadioSettingValueString(0, 1, ' ')
+            rs = RadioSetting(
+                    "%s.NShemi" % bt_idx,
+                    prefix + "NS hemisphere", val)
+            rs.set_apply_callback(self.apply_NShemi, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and self.backtrack_ll_validate(bt.lat, 0, 90):
+                val = RadioSettingValueString(
+                        0, 3, self.backtrack_zero_pad(bt.lat, 3))
+            else:
+                val = RadioSettingValueString(0, 3, '   ')
+            rs = RadioSetting("%s.lat" % bt_idx, prefix + "Latitude", val)
+            rs.set_apply_callback(self.apply_bt_lat, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and \
+                    self.backtrack_ll_validate(bt.lat_min, 0, 59):
+                val = RadioSettingValueString(
+                    0, 2, self.backtrack_zero_pad(bt.lat_min, 2))
+            else:
+                val = RadioSettingValueString(0, 2, '  ')
+            rs = RadioSetting(
+                    "%s.lat_min" % bt_idx,
+                    prefix + "Latitude Minutes", val)
+            rs.set_apply_callback(self.apply_bt_lat_min, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and \
+                    self.backtrack_ll_validate(bt.lat_dec_sec, 0, 9999):
+                val = RadioSettingValueString(
+                    0, 4, self.backtrack_zero_pad(bt.lat_dec_sec, 4))
+            else:
+                val = RadioSettingValueString(0, 4, '    ')
+            rs = RadioSetting(
+                    "%s.lat_dec_sec" % bt_idx,
+                    prefix + "Latitude Decimal Seconds", val)
+            rs.set_apply_callback(self.apply_bt_lat_dec_sec, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and \
+                    (str(bt.WEhemi) == 'W' or str(bt.WEhemi) == 'E'):
+                val = RadioSettingValueString(
+                    0, 1, str(bt.WEhemi))
+            else:
+                val = RadioSettingValueString(0, 1, ' ')
+            rs = RadioSetting(
+                    "%s.WEhemi" % bt_idx,
+                    prefix + "WE hemisphere", val)
+            rs.set_apply_callback(self.apply_WEhemi, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and self.backtrack_ll_validate(bt.lon, 0, 180):
+                val = RadioSettingValueString(
+                    0, 3, self.backtrack_zero_pad(bt.lon, 3))
+            else:
+                val = RadioSettingValueString(0, 3, '   ')
+            rs = RadioSetting("%s.lon" % bt_idx, prefix + "Longitude", val)
+            rs.set_apply_callback(self.apply_bt_lon, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and \
+                    self.backtrack_ll_validate(bt.lon_min, 0, 59):
+                val = RadioSettingValueString(
+                    0, 2, self.backtrack_zero_pad(bt.lon_min, 2))
+            else:
+                val = RadioSettingValueString(0, 2, '  ')
+            rs = RadioSetting(
+                    "%s.lon_min" % bt_idx,
+                    prefix + "Longitude Minutes", val)
+            rs.set_apply_callback(self.apply_bt_lon_min, bt)
+            menu.append(rs)
+
+            if bt.status == 1 and \
+                    self.backtrack_ll_validate(bt.lon_dec_sec, 0, 9999):
+                val = RadioSettingValueString(
+                    0, 4, self.backtrack_zero_pad(bt.lon_dec_sec, 4))
+            else:
+                val = RadioSettingValueString(0, 4, '    ')
+            rs = RadioSetting(
+                "%s.lon_dec_sec" % bt_idx,
+                prefix + "Longitude Decimal Seconds", val)
+            rs.set_apply_callback(self.apply_bt_lon_dec_sec, bt)
+            menu.append(rs)
+
+        return menu
+
     def _get_scan_settings(self):
         menu = RadioSettingGroup("scan_settings", "Scan")
         scan_settings = self._memobj.scan_settings
@@ -1492,7 +1741,8 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
                             self._get_aprs_beacons(),
                             self._get_dtmf_settings(),
                             self._get_misc_settings(),
-                            self._get_scan_settings())
+                            self._get_scan_settings(),
+                            self._get_backtrack_settings())
         return top
 
     def get_settings(self):
@@ -1647,3 +1897,69 @@ class FT1Radio(yaesu_clone.YaesuCloneModeRadio):
         for x in range(len(val), 16):
             val.append(0xFF)
         cls._memobj.dtmf[i].memory = val
+
+    def apply_backtrack_status(cls, setting, obj):
+        status = setting.value.get_value()
+
+        if status == 'Valid':
+            val = 1
+        else:
+            val = 8
+        setattr(obj, "status", val)
+
+    def apply_NShemi(cls, setting, obj):
+        hemi = setting.value.get_value().upper()
+
+        if hemi != 'N' and hemi != 'S':
+            hemi = ' '
+        setattr(obj, "NShemi", hemi)
+
+    def apply_WEhemi(cls, setting, obj):
+        hemi = setting.value.get_value().upper()
+
+        if hemi != 'W' and hemi != 'E':
+            hemi = ' '
+        setattr(obj, "WEhemi", hemi)
+
+    def apply_WEhemi(cls, setting, obj):
+        hemi = setting.value.get_value().upper()
+
+        if hemi != 'W' and hemi != 'E':
+            hemi = ' '
+        setattr(obj, "WEhemi", hemi)
+
+    def apply_bt_lat(cls, setting, obj):
+        val = setting.value.get_value()
+        val = cls.backtrack_zero_pad(val, 3)
+
+        setattr(obj, "lat", val)
+
+    def apply_bt_lat_min(cls, setting, obj):
+        val = setting.value.get_value()
+        val = cls.backtrack_zero_pad(val, 2)
+
+        setattr(obj, "lat_min", val)
+
+    def apply_bt_lat_dec_sec(cls, setting, obj):
+        val = setting.value.get_value()
+        val = cls.backtrack_zero_pad(val, 4)
+
+        setattr(obj, "lat_dec_sec", val)
+
+    def apply_bt_lon(cls, setting, obj):
+        val = setting.value.get_value()
+        val = cls.backtrack_zero_pad(val, 3)
+
+        setattr(obj, "lon", val)
+
+    def apply_bt_lon_min(cls, setting, obj):
+        val = setting.value.get_value()
+        val = cls.backtrack_zero_pad(val, 2)
+
+        setattr(obj, "lon_min", val)
+
+    def apply_bt_lon_dec_sec(cls, setting, obj):
+        val = setting.value.get_value()
+        val = cls.backtrack_zero_pad(val, 4)
+
+        setattr(obj, "lon_dec_sec", val)

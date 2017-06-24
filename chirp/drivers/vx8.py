@@ -243,9 +243,15 @@ struct {
     } entry[8];
   } digi_path_7;
   u8 unknown22[2];
-  struct {
-    char padded_string[16];
-  } message_macro[7];
+} aprs;
+
+#seekto 0x%04X;
+struct {
+  char padded_string[16];
+} aprs_msg_macro[%d];
+
+#seekto 0x%04X;
+struct {
   u8 unknown23:5,
      selected_msg_group:3;
   u8 unknown24;
@@ -285,7 +291,7 @@ struct {
      vibrate_grp:6;
   u8 unknown34:2,
      vibrate_bln:6;
-} aprs;
+} aprs2;
 
 #seekto 0x%04X;
 struct {
@@ -496,20 +502,78 @@ class VX8Radio(yaesu_clone.YaesuCloneModeRadio):
     """Yaesu VX-8"""
     BAUD_RATE = 38400
     VENDOR = "Yaesu"
-    MODEL = "VX-8"
-    VARIANT = "R"
+    MODEL = "VX-8R"
 
     _model = "AH029"
     _memsize = 65227
     _block_lengths = [10, 65217]
     _block_size = 32
-    _mem_params = (0xC24A,  # APRS beacon metadata address.
+    _mem_params = (0xC128,  # APRS message macros
+                   5,       # Number of message macros
+                   0xC178,  # APRS2
+                   0xC24A,  # APRS beacon metadata address.
                    40,      # Number of beacons stored.
                    0xC60A,  # APRS beacon content address.
                    194,     # Length of beacon data stored.
                    40)      # Number of beacons stored.
     _has_vibrate = False
     _has_af_dual = True
+
+    _SG_RE = re.compile(r"(?P<sign>[-+NESW]?)(?P<d>[\d]+)[\s\.,]*"
+                        "(?P<m>[\d]*)[\s\']*(?P<s>[\d]*)")
+
+    _RX_BAUD = ("off", "1200 baud", "9600 baud")
+    _TX_DELAY = ("100ms", "200ms", "300ms",
+                 "400ms", "500ms", "750ms", "1000ms")
+    _WIND_UNITS = ("m/s", "mph")
+    _RAIN_UNITS = ("mm", "inch")
+    _TEMP_UNITS = ("C", "F")
+    _ALT_UNITS = ("m", "ft")
+    _DIST_UNITS = ("km", "mile")
+    _POS_UNITS = ("dd.mmmm'", "dd mm'ss\"")
+    _SPEED_UNITS = ("km/h", "knot", "mph")
+    _TIME_SOURCE = ("manual", "GPS")
+    _TZ = ("-13:00", "-13:30", "-12:00", "-12:30", "-11:00", "-11:30",
+           "-10:00", "-10:30", "-09:00", "-09:30", "-08:00", "-08:30",
+           "-07:00", "-07:30", "-06:00", "-06:30", "-05:00", "-05:30",
+           "-04:00", "-04:30", "-03:00", "-03:30", "-02:00", "-02:30",
+           "-01:00", "-01:30", "-00:00", "-00:30", "+01:00", "+01:30",
+           "+02:00", "+02:30", "+03:00", "+03:30", "+04:00", "+04:30",
+           "+05:00", "+05:30", "+06:00", "+06:30", "+07:00", "+07:30",
+           "+08:00", "+08:30", "+09:00", "+09:30", "+10:00", "+10:30",
+           "+11:00", "+11:30")
+    _BEACON_TYPE = ("Off", "Interval")
+    _BEACON_INT = ("15s", "30s", "1m", "2m", "3m", "5m", "10m", "15m",
+                   "30m")
+    _DIGI_PATHS = ("OFF", "WIDE1-1", "WIDE1-1, WIDE2-1", "Digi Path 4",
+                   "Digi Path 5", "Digi Path 6", "Digi Path 7", "Digi Path 8")
+    _MSG_GROUP_NAMES = ("Message Group 1", "Message Group 2",
+                        "Message Group 3", "Message Group 4",
+                        "Message Group 5", "Message Group 6",
+                        "Message Group 7", "Message Group 8")
+    _POSITIONS = ("GPS", "Manual Latitude/Longitude",
+                  "Manual Latitude/Longitude", "P1", "P2", "P3", "P4",
+                  "P5", "P6", "P7", "P8", "P9", "P10")
+    _FLASH = ("OFF", "ON")
+    _BEEP_SELECT = ("Off", "Key+Scan", "Key")
+    _SQUELCH = ["%d" % x for x in range(0, 16)]
+    _VOLUME = ["%d" % x for x in range(0, 33)]
+    _OPENING_MESSAGE = ("Off", "DC", "Message", "Normal")
+    _SCAN_RESUME = ["%.1fs" % (0.5 * x) for x in range(4, 21)] + \
+                   ["Busy", "Hold"]
+    _SCAN_RESTART = ["%.1fs" % (0.1 * x) for x in range(1, 10)] + \
+                    ["%.1fs" % (0.5 * x) for x in range(2, 21)]
+    _LAMP_KEY = ["Key %d sec" % x for x in range(2, 11)] + \
+                ["Continuous", "OFF"]
+    _LCD_CONTRAST = ["Level %d" % x for x in range(1, 33)]
+    _LCD_DIMMER = ["Level %d" % x for x in range(1, 5)]
+    _TOT_TIME = ["Off"] + ["%.1f min" % (0.5 * x) for x in range(1, 21)]
+    _OFF_ON = ("Off", "On")
+    _VOL_MODE = ("Normal", "Auto Back")
+    _DTMF_MODE = ("Manual", "Auto")
+    _DTMF_SPEED = ("50ms", "100ms")
+    _DTMF_DELAY = ("50ms", "250ms", "450ms", "750ms", "1000ms")
+    _MY_SYMBOL = ("/[ Person", "/b Bike", "/> Car", "User selected")
 
     @classmethod
     def get_prompts(cls):
@@ -547,10 +611,11 @@ class VX8Radio(yaesu_clone.YaesuCloneModeRadio):
         rf.can_odd_split = True
         rf.has_ctone = False
         rf.has_bank_names = True
+        rf.has_settings = True
         return rf
 
     def get_raw_memory(self, number):
-        return repr(self._memobj.memory[number])
+        return repr(self._memobj.memory[number-1])
 
     def _checksums(self):
         return [yaesu_clone.YaesuChecksum(0x064A, 0x06C8),
@@ -654,89 +719,6 @@ class VX8Radio(yaesu_clone.YaesuCloneModeRadio):
     def get_bank_model(self):
         return VX8BankModel(self)
 
-
-@directory.register
-class VX8DRadio(VX8Radio):
-    """Yaesu VX-8DR"""
-    _model = "AH29D"
-    _mem_params = (0xC24A,  # APRS beacon metadata address.
-                   50,      # Number of beacons stored.
-                   0xC6FA,  # APRS beacon content address.
-                   146,     # Length of beacon data stored.
-                   50)      # Number of beacons stored.
-    VARIANT = "DR"
-
-    _SG_RE = re.compile(r"(?P<sign>[-+NESW]?)(?P<d>[\d]+)[\s\.,]*"
-                        "(?P<m>[\d]*)[\s\']*(?P<s>[\d]*)")
-
-    _RX_BAUD = ("off", "1200 baud", "9600 baud")
-    _TX_DELAY = ("100ms", "150ms", "200ms", "250ms", "300ms",
-                 "400ms", "500ms", "750ms", "1000ms")
-    _WIND_UNITS = ("m/s", "mph")
-    _RAIN_UNITS = ("mm", "inch")
-    _TEMP_UNITS = ("C", "F")
-    _ALT_UNITS = ("m", "ft")
-    _DIST_UNITS = ("km", "mile")
-    _POS_UNITS = ("dd.mmmm'", "dd mm'ss\"")
-    _SPEED_UNITS = ("km/h", "knot", "mph")
-    _TIME_SOURCE = ("manual", "GPS")
-    _TZ = ("-13:00", "-13:30", "-12:00", "-12:30", "-11:00", "-11:30",
-           "-10:00", "-10:30", "-09:00", "-09:30", "-08:00", "-08:30",
-           "-07:00", "-07:30", "-06:00", "-06:30", "-05:00", "-05:30",
-           "-04:00", "-04:30", "-03:00", "-03:30", "-02:00", "-02:30",
-           "-01:00", "-01:30", "-00:00", "-00:30", "+01:00", "+01:30",
-           "+02:00", "+02:30", "+03:00", "+03:30", "+04:00", "+04:30",
-           "+05:00", "+05:30", "+06:00", "+06:30", "+07:00", "+07:30",
-           "+08:00", "+08:30", "+09:00", "+09:30", "+10:00", "+10:30",
-           "+11:00", "+11:30")
-    _BEACON_TYPE = ("Off", "Interval", "SmartBeaconing")
-    _SMARTBEACON_PROFILE = ("Off", "Type 1", "Type 2", "Type 3")
-    _BEACON_INT = ("30s", "1m", "2m", "3m", "5m", "10m", "15m",
-                   "20m", "30m", "60m")
-    _DIGI_PATHS = ("OFF", "WIDE1-1", "WIDE1-1, WIDE2-1", "Digi Path 4",
-                   "Digi Path 5", "Digi Path 6", "Digi Path 7", "Digi Path 8")
-    _MSG_GROUP_NAMES = ("Message Group 1", "Message Group 2",
-                        "Message Group 3", "Message Group 4",
-                        "Message Group 5", "Message Group 6",
-                        "Message Group 7", "Message Group 8")
-    _POSITIONS = ("GPS", "Manual Latitude/Longitude",
-                  "Manual Latitude/Longitude", "P1", "P2", "P3", "P4",
-                  "P5", "P6", "P7", "P8", "P9")
-    _FLASH = ("OFF", "2 seconds", "4 seconds", "6 seconds", "8 seconds",
-              "10 seconds", "20 seconds", "30 seconds", "60 seconds",
-              "CONTINUOUS", "every 2 seconds", "every 3 seconds",
-              "every 4 seconds", "every 5 seconds", "every 6 seconds",
-              "every 7 seconds", "every 8 seconds", "every 9 seconds",
-              "every 10 seconds", "every 20 seconds", "every 30 seconds",
-              "every 40 seconds", "every 50 seconds", "every minute",
-              "every 2 minutes", "every 3 minutes", "every 4 minutes",
-              "every 5 minutes", "every 6 minutes", "every 7 minutes",
-              "every 8 minutes", "every 9 minutes", "every 10 minutes")
-    _BEEP_SELECT = ("Off", "Key+Scan", "Key")
-    _SQUELCH = ["%d" % x for x in range(0, 16)]
-    _VOLUME = ["%d" % x for x in range(0, 33)]
-    _OPENING_MESSAGE = ("Off", "DC", "Message", "Normal")
-    _SCAN_RESUME = ["%.1fs" % (0.5 * x) for x in range(4, 21)] + \
-                   ["Busy", "Hold"]
-    _SCAN_RESTART = ["%.1fs" % (0.1 * x) for x in range(1, 10)] + \
-                    ["%.1fs" % (0.5 * x) for x in range(2, 21)]
-    _LAMP_KEY = ["Key %d sec" % x for x in range(2, 11)] + \
-                ["Continuous", "OFF"]
-    _LCD_CONTRAST = ["Level %d" % x for x in range(1, 16)]
-    _LCD_DIMMER = ["Level %d" % x for x in range(1, 5)]
-    _TOT_TIME = ["Off"] + ["%.1f min" % (0.5 * x) for x in range(1, 21)]
-    _OFF_ON = ("Off", "On")
-    _VOL_MODE = ("Normal", "Auto Back")
-    _DTMF_MODE = ("Manual", "Auto")
-    _DTMF_SPEED = ("50ms", "100ms")
-    _DTMF_DELAY = ("50ms", "250ms", "450ms", "750ms", "1000ms")
-    _MY_SYMBOL = ("/[ Person", "/b Bike", "/> Car", "User selected")
-
-    def get_features(self):
-        rf = VX8Radio.get_features(self)
-        rf.has_settings = True
-        return rf
-
     @classmethod
     def _digi_path_to_str(cls, path):
         path_cmp = []
@@ -816,6 +798,7 @@ class VX8DRadio(VX8Radio):
     def _get_aprs_general_settings(self):
         menu = RadioSettingGroup("aprs_general", "APRS General")
         aprs = self._memobj.aprs
+        aprs2 = self._memobj.aprs2
 
         val = RadioSettingValueString(
                 0, 6, str(aprs.my_callsign.callsign).rstrip("\xFF"))
@@ -830,8 +813,8 @@ class VX8DRadio(VX8Radio):
         menu.append(rs)
 
         val = RadioSettingValueList(self._MY_SYMBOL,
-                                    self._MY_SYMBOL[aprs.selected_my_symbol])
-        rs = RadioSetting("aprs.selected_my_symbol", "My Symbol", val)
+                                    self._MY_SYMBOL[aprs2.selected_my_symbol])
+        rs = RadioSetting("aprs2.selected_my_symbol", "My Symbol", val)
         menu.append(rs)
 
         symbols = list(chirp_common.APRS_SYMBOLS)
@@ -958,6 +941,7 @@ class VX8DRadio(VX8Radio):
     def _get_aprs_rx_settings(self):
         menu = RadioSettingGroup("aprs_rx", "APRS Receive")
         aprs = self._memobj.aprs
+        aprs2 = self._memobj.aprs2
 
         val = RadioSettingValueList(self._RX_BAUD, self._RX_BAUD[aprs.rx_baud])
         rs = RadioSetting("aprs.rx_baud", "Modem RX", val)
@@ -981,55 +965,55 @@ class VX8DRadio(VX8Radio):
         menu.append(rs)
 
         val = RadioSettingValueList(self._FLASH,
-                                    self._FLASH[aprs.flash_msg])
-        rs = RadioSetting("aprs.flash_msg", "Flash on personal message", val)
+                                    self._FLASH[aprs2.flash_msg])
+        rs = RadioSetting("aprs2.flash_msg", "Flash on personal message", val)
         menu.append(rs)
 
         if self._has_vibrate:
             val = RadioSettingValueList(self._FLASH,
-                                        self._FLASH[aprs.vibrate_msg])
-            rs = RadioSetting("aprs.vibrate_msg",
+                                        self._FLASH[aprs2.vibrate_msg])
+            rs = RadioSetting("aprs2.vibrate_msg",
                               "Vibrate on personal message", val)
             menu.append(rs)
 
         val = RadioSettingValueList(self._FLASH[:10],
-                                    self._FLASH[aprs.flash_bln])
-        rs = RadioSetting("aprs.flash_bln", "Flash on bulletin message", val)
+                                    self._FLASH[aprs2.flash_bln])
+        rs = RadioSetting("aprs2.flash_bln", "Flash on bulletin message", val)
         menu.append(rs)
 
         if self._has_vibrate:
             val = RadioSettingValueList(self._FLASH[:10],
-                                        self._FLASH[aprs.vibrate_bln])
-            rs = RadioSetting("aprs.vibrate_bln",
+                                        self._FLASH[aprs2.vibrate_bln])
+            rs = RadioSetting("aprs2.vibrate_bln",
                               "Vibrate on bulletin message", val)
             menu.append(rs)
 
         val = RadioSettingValueList(self._FLASH[:10],
-                                    self._FLASH[aprs.flash_grp])
-        rs = RadioSetting("aprs.flash_grp", "Flash on group message", val)
+                                    self._FLASH[aprs2.flash_grp])
+        rs = RadioSetting("aprs2.flash_grp", "Flash on group message", val)
         menu.append(rs)
 
         if self._has_vibrate:
             val = RadioSettingValueList(self._FLASH[:10],
-                                        self._FLASH[aprs.vibrate_grp])
-            rs = RadioSetting("aprs.vibrate_grp",
+                                        self._FLASH[aprs2.vibrate_grp])
+            rs = RadioSetting("aprs2.vibrate_grp",
                               "Vibrate on group message", val)
             menu.append(rs)
 
-        filter_val = [m.padded_string for m in aprs.msg_group]
+        filter_val = [m.padded_string for m in aprs2.msg_group]
         filter_val = self._strip_ff_pads(filter_val)
         for index, filter_text in enumerate(filter_val):
             val = RadioSettingValueString(0, 9, filter_text)
-            rs = RadioSetting("aprs.msg_group_%d" % index,
+            rs = RadioSetting("aprs2.msg_group_%d" % index,
                               "Message Group %d" % (index + 1), val)
             menu.append(rs)
             rs.set_apply_callback(self.apply_ff_padded_string,
-                                  aprs.msg_group[index])
+                                  aprs2.msg_group[index])
         # TODO: Use filter_val as the list entries and update it on edit.
         val = RadioSettingValueList(
             self._MSG_GROUP_NAMES,
-            self._MSG_GROUP_NAMES[aprs.selected_msg_group])
-        rs = RadioSetting("aprs.selected_msg_group", "Selected Message Group",
+            self._MSG_GROUP_NAMES[aprs2.selected_msg_group])
+        rs = RadioSetting("aprs2.selected_msg_group", "Selected Message Group",
                           val)
         menu.append(rs)
 
@@ -1068,6 +1052,7 @@ class VX8DRadio(VX8Radio):
     def _get_aprs_tx_settings(self):
         menu = RadioSettingGroup("aprs_tx", "APRS Transmit")
         aprs = self._memobj.aprs
+        aprs2 = self._memobj.aprs2
 
         beacon_type = (aprs.tx_smartbeacon << 1) | aprs.tx_interval_beacon
         val = RadioSettingValueList(
@@ -1103,40 +1088,17 @@ class VX8DRadio(VX8Radio):
                           "Beacon Status Text", val)
         menu.append(rs)
 
-        message_macro = [m.padded_string for m in aprs.message_macro]
+        message_macro = [m.padded_string for m in self._memobj.aprs_msg_macro]
         message_macro = self._strip_ff_pads(message_macro)
         for index, msg_text in enumerate(message_macro):
             val = RadioSettingValueString(0, 16, msg_text)
-            rs = RadioSetting("aprs.message_macro_%d" % index,
+            rs = RadioSetting("aprs_msg_macro_%d" % index,
                               "Message Macro %d" % (index + 1), val)
             rs.set_apply_callback(self.apply_ff_padded_string,
-                                  aprs.message_macro[index])
+                                  self._memobj.aprs_msg_macro[index])
             menu.append(rs)
 
         path_str = list(self._DIGI_PATHS)
-        path_str[3] = self._digi_path_to_str(aprs.digi_path_3_6[0])
-        val = RadioSettingValueString(0, 22, path_str[3])
-        rs = RadioSetting("aprs.digi_path_3", "Digi Path 4 (2 entries)", val)
-        rs.set_apply_callback(self.apply_digi_path, aprs.digi_path_3_6[0])
-        menu.append(rs)
-
-        path_str[4] = self._digi_path_to_str(aprs.digi_path_3_6[1])
-        val = RadioSettingValueString(0, 22, path_str[4])
-        rs = RadioSetting("aprs.digi_path_4", "Digi Path 5 (2 entries)", val)
-        rs.set_apply_callback(self.apply_digi_path, aprs.digi_path_3_6[1])
-        menu.append(rs)
-
-        path_str[5] = self._digi_path_to_str(aprs.digi_path_3_6[2])
-        val = RadioSettingValueString(0, 22, path_str[5])
-        rs = RadioSetting("aprs.digi_path_5", "Digi Path 6 (2 entries)", val)
-        rs.set_apply_callback(self.apply_digi_path, aprs.digi_path_3_6[2])
-        menu.append(rs)
-
-        path_str[6] = self._digi_path_to_str(aprs.digi_path_3_6[3])
-        val = RadioSettingValueString(0, 22, path_str[6])
-        rs = RadioSetting("aprs.digi_path_6", "Digi Path 7 (2 entries)", val)
-        rs.set_apply_callback(self.apply_digi_path, aprs.digi_path_3_6[3])
-        menu.append(rs)
 
         path_str[7] = self._digi_path_to_str(aprs.digi_path_7)
         val = RadioSettingValueString(0, 88, path_str[7])
@@ -1151,70 +1113,13 @@ class VX8DRadio(VX8Radio):
         # path_str[5] = path_str[5] or self._DIGI_PATHS[5]
         # path_str[6] = path_str[6] or self._DIGI_PATHS[6]
         # path_str[7] = path_str[7] or self._DIGI_PATHS[7]
-        path_str[3] = self._DIGI_PATHS[3]
-        path_str[4] = self._DIGI_PATHS[4]
-        path_str[5] = self._DIGI_PATHS[5]
-        path_str[6] = self._DIGI_PATHS[6]
+
         path_str[7] = self._DIGI_PATHS[7]
         val = RadioSettingValueList(path_str,
-                                    path_str[aprs.selected_digi_path])
-        rs = RadioSetting("aprs.selected_digi_path", "Selected Digi Path", val)
+                                    path_str[aprs2.selected_digi_path])
+        rs = RadioSetting("aprs2.selected_digi_path",
+                          "Selected Digi Path", val)
         menu.append(rs)
-
-        return menu
-
-    def _get_aprs_smartbeacon(self):
-        menu = RadioSettingGroup("aprs_smartbeacon", "APRS SmartBeacon")
-        aprs = self._memobj.aprs
-
-        val = RadioSettingValueList(
-            self._SMARTBEACON_PROFILE,
-            self._SMARTBEACON_PROFILE[aprs.active_smartbeaconing])
-        rs = RadioSetting("aprs.active_smartbeaconing", "SmartBeacon profile",
-                          val)
-        menu.append(rs)
-
-        for profile in range(3):
-            pfx = "type%d" % (profile + 1)
-            path = "aprs.smartbeaconing_profile[%d]" % profile
-            prof = aprs.smartbeaconing_profile[profile]
-
-            low_val = RadioSettingValueInteger(2, 30, prof.low_speed_mph)
-            high_val = RadioSettingValueInteger(3, 70, prof.high_speed_mph)
-            low_val.get_max = lambda: min(30, int(high_val.get_value()) - 1)
-
-            rs = RadioSetting("%s.low_speed_mph" % path,
-                              "%s Low Speed (mph)" % pfx, low_val)
-            menu.append(rs)
-
-            rs = RadioSetting("%s.high_speed_mph" % path,
-                              "%s High Speed (mph)" % pfx, high_val)
-            menu.append(rs)
-
-            val = RadioSettingValueInteger(1, 100, prof.slow_rate_min)
-            rs = RadioSetting("%s.slow_rate_min" % path,
-                              "%s Slow rate (minutes)" % pfx, val)
-            menu.append(rs)
-
-            val = RadioSettingValueInteger(10, 180, prof.fast_rate_sec)
-            rs = RadioSetting("%s.fast_rate_sec" % path,
-                              "%s Fast rate (seconds)" % pfx, val)
-            menu.append(rs)
-
-            val = RadioSettingValueInteger(5, 90, prof.turn_angle)
-            rs = RadioSetting("%s.turn_angle" % path,
-                              "%s Turn angle (degrees)" % pfx, val)
-            menu.append(rs)
-
-            val = RadioSettingValueInteger(1, 255, prof.turn_slop)
-            rs = RadioSetting("%s.turn_slop" % path,
-                              "%s Turn slop" % pfx, val)
-            menu.append(rs)
-
-            val = RadioSettingValueInteger(5, 180, prof.turn_time_sec)
-            rs = RadioSetting("%s.turn_time_sec" % path,
-                              "%s Turn time (seconds)" % pfx, val)
-            menu.append(rs)
 
         return menu
 
@@ -1389,7 +1294,6 @@ class VX8DRadio(VX8Radio):
         top = RadioSettings(self._get_aprs_general_settings(),
                             self._get_aprs_rx_settings(),
                             self._get_aprs_tx_settings(),
-                            self._get_aprs_smartbeacon(),
                             self._get_dtmf_settings(),
                             self._get_misc_settings(),
                             self._get_scan_settings())
@@ -1550,9 +1454,207 @@ class VX8DRadio(VX8Radio):
 
 
 @directory.register
+class VX8DRadio(VX8Radio):
+    """Yaesu VX-8DR"""
+    MODEL = "VX-8DR"
+    _model = "AH29D"
+    _mem_params = (0xC128,  # APRS message macros
+                   7,       # Number of message macros
+                   0xC198,  # APRS2
+                   0xC24A,  # APRS beacon metadata address.
+                   50,      # Number of beacons stored.
+                   0xC6FA,  # APRS beacon content address.
+                   146,     # Length of beacon data stored.
+                   50)      # Number of beacons stored.
+
+    _BEACON_TYPE = ("Off", "Interval", "SmartBeaconing")
+    _SMARTBEACON_PROFILE = ("Off", "Type 1", "Type 2", "Type 3")
+    _POSITIONS = ("GPS", "Manual Latitude/Longitude",
+                  "Manual Latitude/Longitude", "P1", "P2", "P3", "P4",
+                  "P5", "P6", "P7", "P8", "P9")
+    _FLASH = ("OFF", "2 seconds", "4 seconds", "6 seconds", "8 seconds",
+              "10 seconds", "20 seconds", "30 seconds", "60 seconds",
+              "CONTINUOUS", "every 2 seconds", "every 3 seconds",
+              "every 4 seconds", "every 5 seconds", "every 6 seconds",
+              "every 7 seconds", "every 8 seconds", "every 9 seconds",
+              "every 10 seconds", "every 20 seconds", "every 30 seconds",
+              "every 40 seconds", "every 50 seconds", "every minute",
+              "every 2 minutes", "every 3 minutes", "every 4 minutes",
+              "every 5 minutes", "every 6 minutes", "every 7 minutes",
+              "every 8 minutes", "every 9 minutes", "every 10 minutes")
+    _LCD_CONTRAST = ["Level %d" % x for x in range(1, 16)]
+    _MY_SYMBOL = ("/[ Person", "/b Bike", "/> Car", "User selected")
+
+    def _get_aprs_tx_settings(self):
+        menu = RadioSettingGroup("aprs_tx", "APRS Transmit")
+        aprs = self._memobj.aprs
+        aprs2 = self._memobj.aprs2
+
+        beacon_type = (aprs.tx_smartbeacon << 1) | aprs.tx_interval_beacon
+        val = RadioSettingValueList(
+                self._BEACON_TYPE, self._BEACON_TYPE[beacon_type])
+        rs = RadioSetting("aprs.transmit", "TX Beacons", val)
+        rs.set_apply_callback(self.apply_beacon_type, aprs)
+        menu.append(rs)
+
+        val = RadioSettingValueList(
+                self._TX_DELAY, self._TX_DELAY[aprs.tx_delay])
+        rs = RadioSetting("aprs.tx_delay", "TX Delay", val)
+        menu.append(rs)
+
+        val = RadioSettingValueList(
+                self._BEACON_INT, self._BEACON_INT[aprs.beacon_interval])
+        rs = RadioSetting("aprs.beacon_interval", "Beacon Interval", val)
+        menu.append(rs)
+
+        desc = []
+        status = [m.padded_string for m in self._memobj.aprs_beacon_status_txt]
+        status = self._strip_ff_pads(status)
+        for index, msg_text in enumerate(status):
+            val = RadioSettingValueString(0, 60, msg_text)
+            desc.append("Beacon Status Text %d" % (index + 1))
+            rs = RadioSetting("aprs_beacon_status_txt_%d" % index, desc[-1],
+                              val)
+            rs.set_apply_callback(self.apply_ff_padded_string,
+                                  self._memobj.aprs_beacon_status_txt[index])
+            menu.append(rs)
+        val = RadioSettingValueList(desc,
+                                    desc[aprs.selected_beacon_status_txt])
+        rs = RadioSetting("aprs.selected_beacon_status_txt",
+                          "Beacon Status Text", val)
+        menu.append(rs)
+
+        message_macro = [m.padded_string for m in self._memobj.aprs_msg_macro]
+        message_macro = self._strip_ff_pads(message_macro)
+        for index, msg_text in enumerate(message_macro):
+            val = RadioSettingValueString(0, 16, msg_text)
+            rs = RadioSetting("aprs_msg_macro_%d" % index,
+                              "Message Macro %d" % (index + 1), val)
+            rs.set_apply_callback(self.apply_ff_padded_string,
+                                  self._memobj.aprs_msg_macro[index])
+            menu.append(rs)
+
+        path_str = list(self._DIGI_PATHS)
+        path_str[3] = self._digi_path_to_str(aprs2.digi_path_3_6[0])
+        val = RadioSettingValueString(0, 22, path_str[3])
+        rs = RadioSetting("aprs2.digi_path_3", "Digi Path 4 (2 entries)", val)
+        rs.set_apply_callback(self.apply_digi_path, aprs2.digi_path_3_6[0])
+        menu.append(rs)
+
+        path_str[4] = self._digi_path_to_str(aprs2.digi_path_3_6[1])
+        val = RadioSettingValueString(0, 22, path_str[4])
+        rs = RadioSetting("aprs2.digi_path_4", "Digi Path 5 (2 entries)", val)
+        rs.set_apply_callback(self.apply_digi_path, aprs2.digi_path_3_6[1])
+        menu.append(rs)
+
+        path_str[5] = self._digi_path_to_str(aprs2.digi_path_3_6[2])
+        val = RadioSettingValueString(0, 22, path_str[5])
+        rs = RadioSetting("aprs2.digi_path_5", "Digi Path 6 (2 entries)", val)
+        rs.set_apply_callback(self.apply_digi_path, aprs2.digi_path_3_6[2])
+        menu.append(rs)
+
+        path_str[6] = self._digi_path_to_str(aprs2.digi_path_3_6[3])
+        val = RadioSettingValueString(0, 22, path_str[6])
+        rs = RadioSetting("aprs2.digi_path_6", "Digi Path 7 (2 entries)", val)
+        rs.set_apply_callback(self.apply_digi_path, aprs2.digi_path_3_6[3])
+        menu.append(rs)
+
+        path_str[7] = self._digi_path_to_str(aprs.digi_path_7)
+        val = RadioSettingValueString(0, 88, path_str[7])
+        rs = RadioSetting("aprs.digi_path_7", "Digi Path 8 (8 entries)", val)
+        rs.set_apply_callback(self.apply_digi_path, aprs.digi_path_7)
+        menu.append(rs)
+
+        # Show friendly messages for empty slots rather than blanks.
+        # TODO: Rebuild this when digi_path_[34567] change.
+        # path_str[3] = path_str[3] or self._DIGI_PATHS[3]
+        # path_str[4] = path_str[4] or self._DIGI_PATHS[4]
+        # path_str[5] = path_str[5] or self._DIGI_PATHS[5]
+        # path_str[6] = path_str[6] or self._DIGI_PATHS[6]
+        # path_str[7] = path_str[7] or self._DIGI_PATHS[7]
+        path_str[3] = self._DIGI_PATHS[3]
+        path_str[4] = self._DIGI_PATHS[4]
+        path_str[5] = self._DIGI_PATHS[5]
+        path_str[6] = self._DIGI_PATHS[6]
+        path_str[7] = self._DIGI_PATHS[7]
+        val = RadioSettingValueList(path_str,
+                                    path_str[aprs2.selected_digi_path])
+        rs = RadioSetting("aprs2.selected_digi_path",
+                          "Selected Digi Path", val)
+        menu.append(rs)
+
+        return menu
+
+    def _get_aprs_smartbeacon(self):
+        menu = RadioSettingGroup("aprs_smartbeacon", "APRS SmartBeacon")
+        aprs2 = self._memobj.aprs2
+
+        val = RadioSettingValueList(
+           self._SMARTBEACON_PROFILE,
+           self._SMARTBEACON_PROFILE[aprs2.active_smartbeaconing])
+        rs = RadioSetting("aprs2.active_smartbeaconing",
+                          "SmartBeacon profile", val)
+        menu.append(rs)
+
+        for profile in range(3):
+            pfx = "type%d" % (profile + 1)
+            path = "aprs2.smartbeaconing_profile[%d]" % profile
+            prof = aprs2.smartbeaconing_profile[profile]
+
+            low_val = RadioSettingValueInteger(2, 30, prof.low_speed_mph)
+            high_val = RadioSettingValueInteger(3, 70, prof.high_speed_mph)
+            low_val.get_max = lambda: min(30, int(high_val.get_value()) - 1)
+
+            rs = RadioSetting("%s.low_speed_mph" % path,
+                              "%s Low Speed (mph)" % pfx, low_val)
+            menu.append(rs)
+
+            rs = RadioSetting("%s.high_speed_mph" % path,
+                              "%s High Speed (mph)" % pfx, high_val)
+            menu.append(rs)
+
+            val = RadioSettingValueInteger(1, 100, prof.slow_rate_min)
+            rs = RadioSetting("%s.slow_rate_min" % path,
+                              "%s Slow rate (minutes)" % pfx, val)
+            menu.append(rs)
+
+            val = RadioSettingValueInteger(10, 180, prof.fast_rate_sec)
+            rs = RadioSetting("%s.fast_rate_sec" % path,
+                              "%s Fast rate (seconds)" % pfx, val)
+            menu.append(rs)
+
+            val = RadioSettingValueInteger(5, 90, prof.turn_angle)
+            rs = RadioSetting("%s.turn_angle" % path,
+                              "%s Turn angle (degrees)" % pfx, val)
+            menu.append(rs)
+
+            val = RadioSettingValueInteger(1, 255, prof.turn_slop)
+            rs = RadioSetting("%s.turn_slop" % path,
+                              "%s Turn slop" % pfx, val)
+            menu.append(rs)
+
+            val = RadioSettingValueInteger(5, 180, prof.turn_time_sec)
+            rs = RadioSetting("%s.turn_time_sec" % path,
+                              "%s Turn time (seconds)" % pfx, val)
+            menu.append(rs)
+
+        return menu
+
+    def _get_settings(self):
+        top = RadioSettings(self._get_aprs_general_settings(),
+                            self._get_aprs_rx_settings(),
+                            self._get_aprs_tx_settings(),
+                            self._get_aprs_smartbeacon(),
+                            self._get_dtmf_settings(),
+                            self._get_misc_settings(),
+                            self._get_scan_settings())
+        return top
+
+
+@directory.register
 class VX8GERadio(VX8DRadio):
     """Yaesu VX-8GE"""
+    MODEL = "VX-8GE"
     _model = "AH041"
-    VARIANT = "GE"
     _has_vibrate = True
     _has_af_dual = False

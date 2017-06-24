@@ -71,6 +71,8 @@ LIST_TIMEOUT = ["%s sec" % x for x in range(15, 615, 15)]
 LIST_TXPOWER = ["High", "Low"]
 LIST_VOICE = ["Off", "English", "Chinese"]
 LIST_WORKMODE = ["Frequency", "Channel"]
+LIST_DTMF_SPECIAL_DIGITS = [ "*", "#", "A", "B", "C", "D"]
+LIST_DTMF_SPECIAL_VALUES = [ 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x00]
 
 def model_match(cls, data):
     """Match the opened/downloaded image to the correct version"""
@@ -1117,6 +1119,33 @@ class UV5X3(baofeng_common.BaofengCommonHT):
                     code.append(0xFF)
             obj.revive = code
         rs.set_apply_callback(apply_code, self._memobj.ani)
+        dtmfd.append(rs)
+
+        def apply_dmtf_listvalue(setting, obj):
+            LOG.debug("Setting value: "+ str(setting.value) + " from list")
+            val = str(setting.value)
+            index = LIST_DTMF_SPECIAL_DIGITS.index(val)
+            val = LIST_DTMF_SPECIAL_VALUES[index]
+            obj.set_value(val)
+
+        if _mem.ani.groupcode in LIST_DTMF_SPECIAL_VALUES:
+            idx = LIST_DTMF_SPECIAL_VALUES.index(_mem.ani.groupcode)
+        else:
+            idx = LIST_DTMF_SPECIAL_VALUES.index(0x0B)
+        rs = RadioSetting("ani.groupcode", "Group Code",
+                          RadioSettingValueList(LIST_DTMF_SPECIAL_DIGITS,
+                                                LIST_DTMF_SPECIAL_DIGITS[idx]))
+        rs.set_apply_callback(apply_dmtf_listvalue, _mem.ani.groupcode)
+        dtmfd.append(rs)
+
+        if _mem.ani.spacecode in LIST_DTMF_SPECIAL_VALUES:
+            idx = LIST_DTMF_SPECIAL_VALUES.index(_mem.ani.spacecode)
+        else:
+            idx = LIST_DTMF_SPECIAL_VALUES.index(0x0C)
+        rs = RadioSetting("ani.spacecode", "Space Code",
+                          RadioSettingValueList(LIST_DTMF_SPECIAL_DIGITS,
+                                                LIST_DTMF_SPECIAL_DIGITS[idx]))
+        rs.set_apply_callback(apply_dmtf_listvalue, _mem.ani.spacecode)
         dtmfd.append(rs)
 
         if _mem.ani.resettime > 0x9F:

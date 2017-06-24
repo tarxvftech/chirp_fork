@@ -69,6 +69,12 @@ struct {
   u8   passwd[6];
 } frontmatter;
 
+#seekto 0x02c0;
+struct {
+  ul32 start_freq;
+  ul32 end_freq;
+} prog_vfo[6];
+
 #seekto 0x0300;
 struct {
   char power_on_msg[8];
@@ -89,8 +95,8 @@ struct {
 
 #seekto 0x0c00;
 struct {
-  u8 disabled:7,
-     unknown0:1;
+  u8 disabled:4,
+     prog_vfo:4;
   u8 skip;
 } flag[1032];
 
@@ -183,10 +189,29 @@ DUPLEX_REV = {
 EXCH_R = "R\x00\x00\x00\x00"
 EXCH_W = "W\x00\x00\x00\x00"
 
-# Uploads result in "MCP Error" and garbage data in memory
-# Clone driver disabled in favor of error-checking live driver.
+DEFAULT_PROG_VFO = (
+    (136000000, 174000000),
+    (410000000, 470000000),
+    (118000000, 136000000),
+    (136000000, 174000000),
+    (320000000, 400000000),
+    (400000000, 524000000),
+)
+# index of PROG_VFO used for setting memory.unknown1 and memory.unknown2
+# see http://chirp.danplanet.com/issues/1611#note-9
+UNKNOWN_LOOKUP = (0, 7, 4, 0, 4, 7)
+
+
+def get_prog_vfo(frequency):
+    for i, (start, end) in enumerate(DEFAULT_PROG_VFO):
+        if start <= frequency < end:
+            return i
+    raise ValueError("Frequency is out of range.")
+
+
 @directory.register
 class THD72Radio(chirp_common.CloneModeRadio):
+
     BAUD_RATE = 9600
     VENDOR = "Kenwood"
     MODEL = "TH-D72 (clone mode)"
@@ -200,10 +225,12 @@ class THD72Radio(chirp_common.CloneModeRadio):
     _LCD_CONTRAST = ["Level %d" % x for x in range(1, 16)]
     _LAMP_CONTROL = ["Manual", "Auto"]
     _LAMP_TIMER = ["Seconds %d" % x for x in range(2, 11)]
-    _BATTERY_SAVER = [ "OFF", "0.03 Seconds", "0.2 Seconds", "0.4 Seconds", "0.6 Seconds", "0.8 Seconds", "1 Seconds", "2 Seconds", "3 Seconds", "4 Seconds", "5 Seconds" ]
-    _APO = [ "OFF", "15 Minutes", "30 Minutes", "60 Minutes" ]
-    _AUDIO_BALANCE = [ "Center", "A +50%", "A +100%", "B +50%", "B +100%" ]
-    _KEY_BEEP = [ "OFF", "Radio & GPS", "Radio Only", "GPS Only" ]
+    _BATTERY_SAVER = ["OFF", "0.03 Seconds", "0.2 Seconds", "0.4 Seconds",
+                      "0.6 Seconds", "0.8 Seconds", "1 Seconds", "2 Seconds",
+                      "3 Seconds", "4 Seconds", "5 Seconds"]
+    _APO = ["OFF", "15 Minutes", "30 Minutes", "60 Minutes"]
+    _AUDIO_BALANCE = ["Center", "A +50%", "A +100%", "B +50%", "B +100%"]
+    _KEY_BEEP = ["OFF", "Radio & GPS", "Radio Only", "GPS Only"]
 
     def get_features(self):
         rf = chirp_common.RadioFeatures()
@@ -267,7 +294,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
         return name[:name.index('\xff')].rstrip()
 
     def set_channel_name(self, number, name):
-        name = name[:8] + '\xff'*8
+        name = name[:8] + '\xff' * 8
         if number < 999:
             self._memobj.channel_name[number].name = name[:8]
             self.add_dirty_block(self._memobj.channel_name[number])
@@ -278,7 +305,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
 
     def get_raw_memory(self, number):
         return repr(self._memobj.memory[number]) + \
-            repr(self._memobj.flag[(number)])
+            repr(self._memobj.flag[number])
 
     def get_memory(self, number):
         if isinstance(number, str):
@@ -290,7 +317,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
 
         if number < 0 or number > (max(THD72_SPECIAL.values()) + 1):
             raise errors.InvalidMemoryLocation(
-                    "Number must be between 0 and 999")
+                "Number must be between 0 and 999")
 
         _mem = self._memobj.memory[number]
         flag = self._memobj.flag[number]
@@ -300,7 +327,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
 
         if number > 999:
             mem.extd_number = THD72_SPECIAL_REV[number]
-        if flag.disabled == 0x7f:
+        if flag.disabled == 0xf:
             mem.empty = True
             return mem
 
@@ -343,9 +370,9 @@ class THD72Radio(chirp_common.CloneModeRadio):
         self.add_dirty_block(self._memobj.flag[mem.number])
 
         # only delete non-WX channels
-        was_empty = flag.disabled == 0x7f
+        was_empty = flag.disabled == 0xf
         if mem.empty:
-            flag.disabled = 0x7f
+            flag.disabled = 0xf
             return
         flag.disabled = 0
 
@@ -367,6 +394,10 @@ class THD72Radio(chirp_common.CloneModeRadio):
         _mem.duplex = DUPLEX_REV[mem.duplex]
         _mem.offset = mem.offset
         _mem.mode = MODES_REV[mem.mode]
+
+        prog_vfo = get_prog_vfo(mem.freq)
+        flag.prog_vfo = prog_vfo
+        _mem.unknown1 = _mem.unknown2 = UNKNOWN_LOOKUP[prog_vfo]
 
         if mem.number < 999:
             flag.skip = chirp_common.SKIP_VALUES.index(mem.skip)
@@ -406,7 +437,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
     def write_block(self, block, map):
         self.pipe.write(struct.pack("<cBHB", "W", 0, block, 0))
         base = block * 256
-        self.pipe.write(map[base:base+256])
+        self.pipe.write(map[base:base + 256])
 
         ack = self.pipe.read(1)
 
@@ -416,12 +447,12 @@ class THD72Radio(chirp_common.CloneModeRadio):
         if blocks is None:
             blocks = range(self._memsize / 256)
         else:
-            blocks = [b for b in blocks if b < self._memsize/256]
+            blocks = [b for b in blocks if b < self._memsize / 256]
 
         if self.command("0M PROGRAM") != "0M":
             raise errors.RadioError("No response from self")
 
-        allblocks = range(self._memsize/256)
+        allblocks = range(self._memsize / 256)
         self.pipe.baudrate = 57600
         try:
             self.pipe.setRTS()
@@ -434,7 +465,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
         count = 0
         for i in allblocks:
             if i not in blocks:
-                data += 256*'\xff'
+                data += 256 * '\xff'
                 continue
             data += self.read_block(i)
             count += 1
@@ -455,7 +486,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
         if blocks is None:
             blocks = range((self._memsize / 256) - 2)
         else:
-            blocks = [b for b in blocks if b < self._memsize/256]
+            blocks = [b for b in blocks if b < self._memsize / 256]
 
         if self.command("0M PROGRAM") != "0M":
             raise errors.RadioError("No response from self")
@@ -504,9 +535,8 @@ class THD72Radio(chirp_common.CloneModeRadio):
             raise errors.RadioError("No response to ID command")
 
     def initialize(self, mmap):
-        mmap[0] = \
-            "\x80\xc8\xb3\x08\x00\x01\x00\x08" + \
-            "\x08\x00\xc0\x27\x09\x00\x00\xff"
+        mmap.set_raw("\x00\xc8\xb3\x08\x00\x01\x00\x08"
+                     "\x08\x00\xc0\x27\x09\x00\x00\x00")
 
     def _get_settings(self):
         top = RadioSettings(self._get_display_settings(),
@@ -546,7 +576,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
                 try:
                     old_val = getattr(obj, setting)
                     LOG.debug("Setting %s(%r) <= %s" % (
-                            element.get_name(), old_val, element.value))
+                        element.get_name(), old_val, element.value))
                     setattr(obj, setting, element.value)
                 except AttributeError as e:
                     LOG.error("Setting %s is not in the memory map: %s" %
@@ -592,7 +622,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
         rs = RadioSetting("display.power_on_msg", "Power on message", val)
         rs.set_apply_callback(self.apply_power_on_msg, display_settings)
         menu.append(rs)
-        
+
         val = RadioSettingValueList(
             self._LCD_CONTRAST,
             self._LCD_CONTRAST[display_settings.contrast - 1])
@@ -600,7 +630,7 @@ class THD72Radio(chirp_common.CloneModeRadio):
                           val)
         rs.set_apply_callback(self.apply_lcd_contrast, display_settings)
         menu.append(rs)
-        
+
         val = RadioSettingValueList(
             self._LAMP_CONTROL,
             self._LAMP_CONTROL[display_settings.lamp_control])
