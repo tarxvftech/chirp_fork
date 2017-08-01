@@ -29,7 +29,7 @@ import sys
 
 from chirp.ui import inputdialog, common
 from chirp import platform, directory, util
-from chirp.drivers import generic_xml, generic_csv
+from chirp.drivers import generic_xml, generic_csv, repeaterbook
 from chirp.drivers import ic9x, kenwood_live, idrp, vx7, vx5, vx6
 from chirp.drivers import icf, ic9x_icf
 from chirp import CHIRP_VERSION, chirp_common, detect, errors
@@ -81,6 +81,7 @@ class ModifiedError(Exception):
 
 
 class ChirpMain(gtk.Window):
+
     def get_current_editorset(self):
         page = self.tabs.get_current_page()
         if page is not None:
@@ -137,7 +138,7 @@ class ChirpMain(gtk.Window):
     def ev_editor_selected(self, editorset, editortype):
         mappings = {
             "memedit": ["view", "edit"],
-            }
+        }
 
         for _editortype, actions in mappings.items():
             for _action in actions:
@@ -315,7 +316,8 @@ of file.
 
     def do_open(self, fname=None, tempname=None):
         if not fname:
-            types = [(_("CHIRP Radio Images") + " (*.img)", "*.img"),
+            types = [(_("All files") + " (*.*)", "*"),
+                     (_("CHIRP Radio Images") + " (*.img)", "*.img"),
                      (_("CHIRP Files") + " (*.chirp)", "*.chirp"),
                      (_("CSV Files") + " (*.csv)", "*.csv"),
                      (_("DAT Files") + " (*.dat)", "*.dat"),
@@ -443,7 +445,7 @@ of file.
         ).replace('/', '_')
 
         types = [(label + " (*.%s)" % eset.radio.FILE_EXTENSION,
-                 eset.radio.FILE_EXTENSION)]
+                  eset.radio.FILE_EXTENSION)]
 
         if isinstance(eset.radio, vx7.VX7Radio):
             types += [(_("VX7 Commander") + " (*.vx7)", "vx7")]
@@ -519,7 +521,7 @@ of file.
 
             file_basename = os.path.basename(fname).replace("_", "__")
             action = gtk.Action(
-                action_name, "_%i. %s" % (i+1, file_basename),
+                action_name, "_%i. %s" % (i + 1, file_basename),
                 _("Open recent file {name}").format(name=fname), "")
             action.connect("activate", lambda a, f: self.do_open(f), fname)
             mid = self.menu_uim.new_merge_id()
@@ -545,10 +547,7 @@ of file.
         count = eset.do_import(config)
 
     def copy_shipped_stock_configs(self, stock_dir):
-        execpath = platform.get_platform().executable_path()
-        basepath = os.path.abspath(os.path.join(execpath, "stock_configs"))
-        if not os.path.exists(basepath):
-            basepath = "/usr/share/chirp/stock_configs"
+        basepath = platform.get_platform().find_resource("stock_configs")
 
         files = glob(os.path.join(basepath, "*.csv"))
         for fn in files:
@@ -646,7 +645,7 @@ of file.
             _("Don't show instructions for any radio again"))
         again.show()
         again.connect("toggled", lambda action:
-            self.clonemenu.set_active(not action.get_active()))
+                      self.clonemenu.set_active(not action.get_active()))
         d.vbox.pack_start(again, 0, 0, 0)
         h_button_box = d.vbox.get_children()[2]
         try:
@@ -658,7 +657,6 @@ of file.
             pass
         d.run()
         d.destroy()
-
 
     def do_download(self, port=None, rtype=None):
         d = clone.CloneSettingsDialog(parent=self)
@@ -793,7 +791,8 @@ of file.
         return True
 
     def do_import(self):
-        types = [(_("CHIRP Files") + " (*.chirp)", "*.chirp"),
+        types = [(_("All files") + " (*.*)", "*"),
+                 (_("CHIRP Files") + " (*.chirp)", "*.chirp"),
                  (_("CHIRP Radio Images") + " (*.img)", "*.img"),
                  (_("CSV Files") + " (*.csv)", "*.csv"),
                  (_("DAT Files") + " (*.dat)", "*.dat"),
@@ -813,7 +812,66 @@ of file.
         count = eset.do_import(filen)
         reporting.report_model_usage(eset.rthread.radio, "import", count > 0)
 
-    def do_repeaterbook_prompt(self):
+    def do_dmrmarc_prompt(self):
+        fields = {"1City":      (gtk.Entry(), lambda x: x),
+                  "2State":     (gtk.Entry(), lambda x: x),
+                  "3Country":   (gtk.Entry(), lambda x: x),
+                  }
+
+        d = inputdialog.FieldDialog(title=_("DMR-MARC Repeater Database Dump"),
+                                    parent=self)
+        for k in sorted(fields.keys()):
+            d.add_field(k[1:], fields[k][0])
+            fields[k][0].set_text(CONF.get(k[1:], "dmrmarc") or "")
+
+        while d.run() == gtk.RESPONSE_OK:
+            for k in sorted(fields.keys()):
+                widget, validator = fields[k]
+                try:
+                    if validator(widget.get_text()):
+                        CONF.set(k[1:], widget.get_text(), "dmrmarc")
+                        continue
+                except Exception:
+                    pass
+
+            d.destroy()
+            return True
+
+        d.destroy()
+        return False
+
+    def do_dmrmarc(self, do_import):
+        self.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.WATCH))
+        if not self.do_dmrmarc_prompt():
+            self.window.set_cursor(None)
+            return
+
+        city = CONF.get("city", "dmrmarc")
+        state = CONF.get("state", "dmrmarc")
+        country = CONF.get("country", "dmrmarc")
+
+        # Do this in case the import process is going to take a while
+        # to make sure we process events leading up to this
+        gtk.gdk.window_process_all_updates()
+        while gtk.events_pending():
+            gtk.main_iteration(False)
+
+        if do_import:
+            eset = self.get_current_editorset()
+            dmrmarcstr = "dmrmarc://%s/%s/%s" % (city, state, country)
+            eset.do_import(dmrmarcstr)
+        else:
+            try:
+                from chirp import dmrmarc
+                radio = dmrmarc.DMRMARCRadio(None)
+                radio.set_params(city, state, country)
+                self.do_open_live(radio, read_only=True)
+            except errors.RadioError, e:
+                common.show_error(e)
+
+        self.window.set_cursor(None)
+
+    def do_repeaterbook_political_prompt(self):
         if not CONF.get_bool("has_seen_credit", "repeaterbook"):
             d = gtk.MessageDialog(parent=self, buttons=gtk.BUTTONS_OK)
             d.set_markup("<big><big><b>RepeaterBook</b></big>\r\n" +
@@ -889,9 +947,9 @@ of file.
 
         return True
 
-    def do_repeaterbook(self, do_import):
+    def do_repeaterbook_political(self, do_import):
         self.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.WATCH))
-        if not self.do_repeaterbook_prompt():
+        if not self.do_repeaterbook_political_prompt():
             self.window.set_cursor(None)
             return
 
@@ -919,6 +977,7 @@ of file.
         query = query % (code,
                          band and band or "%%",
                          county and county or "%%")
+        print query
 
         # Do this in case the import process is going to take a while
         # to make sure we process events leading up to this
@@ -934,24 +993,115 @@ of file.
             self.window.set_cursor(None)
             return
 
-        class RBRadio(generic_csv.CSVRadio,
-                      chirp_common.NetworkSourceRadio):
-            VENDOR = "RepeaterBook"
-            MODEL = ""
+        try:
+            # Validate CSV
+            radio = repeaterbook.RBRadio(filename)
+            if radio.errors:
+                reporting.report_misc_error("repeaterbook",
+                                            ("query=%s\n" % query) +
+                                            ("\n") +
+                                            ("\n".join(radio.errors)))
+        except errors.InvalidDataError, e:
+            common.show_error(str(e))
+            self.window.set_cursor(None)
+            return
+        except Exception, e:
+            common.log_exception()
 
-            def _clean_comment(self, headers, line, mem):
-                "Converts iso-8859-1 encoded comments to unicode for pyGTK."
-                mem.comment = unicode(mem.comment, 'iso-8859-1')
-                return mem
+        reporting.report_model_usage(radio, "import", True)
 
-            def _clean_name(self, headers, line, mem):
-                "Converts iso-8859-1 encoded names to unicode for pyGTK."
-                mem.name = unicode(mem.name, 'iso-8859-1')
-                return mem
+        self.window.set_cursor(None)
+        if do_import:
+            eset = self.get_current_editorset()
+            count = eset.do_import(filename)
+        else:
+            self.do_open_live(radio, read_only=True)
+
+    def do_repeaterbook_proximity_prompt(self):
+        default_band = "--All--"
+        try:
+            code = int(CONF.get("band", "repeaterbook"))
+            for k, v in RB_BANDS.items():
+                if code == v:
+                    default_band = k
+                    break
+        except:
+            pass
+        fields = {"1Location":  (gtk.Entry(), lambda x: x.get_text()),
+                  "2Distance":  (gtk.Entry(), lambda x: x.get_text()),
+                  "3Band":      (miscwidgets.make_choice(
+                                sorted(RB_BANDS.keys(), key=key_bands),
+                                False, default_band),
+                                lambda x: RB_BANDS[x.get_active_text()]),
+                  }
+
+        d = inputdialog.FieldDialog(title=_("RepeaterBook Query"),
+                                    parent=self)
+        for k in sorted(fields.keys()):
+            d.add_field(k[1:], fields[k][0])
+            if isinstance(fields[k][0], gtk.Entry):
+                fields[k][0].set_text(
+                    CONF.get(k[1:].lower(), "repeaterbook") or "")
+
+        while d.run() == gtk.RESPONSE_OK:
+            valid = True
+            for k, (widget, fn) in fields.items():
+                try:
+                    CONF.set(k[1:].lower(), str(fn(widget)), "repeaterbook")
+                    continue
+                except:
+                    pass
+                common.show_error("Invalid value for %s" % k[1:])
+                valid = False
+                break
+
+            if valid:
+                d.destroy()
+                return True
+
+        d.destroy()
+        return False
+
+    def do_repeaterbook_proximity(self, do_import):
+        self.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.WATCH))
+        if not self.do_repeaterbook_proximity_prompt():
+            self.window.set_cursor(None)
+            return
+
+        loc = CONF.get("location", "repeaterbook")
+
+        try:
+            dist = int(CONF.get("distance", "repeaterbook"))
+        except:
+            dist = 20
+
+        try:
+            band = int(CONF.get("band", "repeaterbook")) or '%'
+            band = str(band)
+        except:
+            band = '%'
+
+        query = "https://www.repeaterbook.com/repeaters/downloads/CHIRP/" \
+                "app_direct.php?loc=%s&band=%s&dist=%s" % (loc, band, dist)
+        print query
+
+        # Do this in case the import process is going to take a while
+        # to make sure we process events leading up to this
+        gtk.gdk.window_process_all_updates()
+        while gtk.events_pending():
+            gtk.main_iteration(False)
+
+        fn = tempfile.mktemp(".csv")
+        filename, headers = urllib.urlretrieve(query, fn)
+        if not os.path.exists(filename):
+            LOG.error("Failed, headers were: %s", headers)
+            common.show_error(_("RepeaterBook query failed"))
+            self.window.set_cursor(None)
+            return
 
         try:
             # Validate CSV
-            radio = RBRadio(filename)
+            radio = repeaterbook.RBRadio(filename)
             if radio.errors:
                 reporting.report_misc_error("repeaterbook",
                                             ("query=%s\n" % query) +
@@ -996,7 +1146,7 @@ of file.
             "Latitude": (gtk.Entry(), lambda x: float(x.get_text())),
             "Longitude": (gtk.Entry(), lambda x: float(x.get_text())),
             "Range": (gtk.Entry(), lambda x: int(x.get_text())),
-            }
+        }
         for name in sorted(fields.keys()):
             value, fn = fields[name]
             d.add_field(name, value)
@@ -1378,11 +1528,13 @@ of file.
             devaction.set_visible(action.get_active())
 
     def do_toggle_clone_instructions(self, action):
-        CONF.set_bool("clone_instructions", not action.get_active(), "noconfirm")
+        CONF.set_bool("clone_instructions",
+                      not action.get_active(), "noconfirm")
 
     def do_change_language(self):
         langs = ["Auto", "English", "Polish", "Italian", "Dutch", "German",
-                 "Hungarian", "Russian", "Portuguese (BR)", "French", "Spanish"]
+                 "Hungarian", "Russian", "Portuguese (BR)", "French",
+                 "Spanish"]
         d = inputdialog.ChoiceDialog(langs, parent=self,
                                      title="Choose Language")
         d.label.set_text(_("Choose a language or Auto to use the "
@@ -1441,14 +1593,18 @@ of file.
             self.do_close()
         elif action == "import":
             self.do_import()
+        elif action in ["qdmrmarc", "idmrmarc"]:
+            self.do_dmrmarc(action[0] == "i")
         elif action in ["qrfinder", "irfinder"]:
             self.do_rfinder(action[0] == "i")
         elif action in ["qradioreference", "iradioreference"]:
             self.do_radioreference(action[0] == "i")
         elif action == "export":
             self.do_export()
-        elif action in ["qrbook", "irbook"]:
-            self.do_repeaterbook(action[0] == "i")
+        elif action in ["qrbookpolitical", "irbookpolitical"]:
+            self.do_repeaterbook_political(action[0] == "i")
+        elif action in ["qrbookproximity", "irbookproximity"]:
+            self.do_repeaterbook_proximity(action[0] == "i")
         elif action in ["qpr", "ipr"]:
             self.do_przemienniki(action[0] == "i")
         elif action == "about":
@@ -1536,14 +1692,22 @@ of file.
       <menuitem action="download"/>
       <menuitem action="upload"/>
       <menu action="importsrc" name="importsrc">
+        <menuitem action="idmrmarc"/>
         <menuitem action="iradioreference"/>
-        <menuitem action="irbook"/>
+        <menu action="irbook" name="irbook">
+            <menuitem action="irbookpolitical"/>
+            <menuitem action="irbookproximity"/>
+        </menu>
         <menuitem action="ipr"/>
         <menuitem action="irfinder"/>
       </menu>
       <menu action="querysrc" name="querysrc">
+        <menuitem action="qdmrmarc"/>
         <menuitem action="qradioreference"/>
-        <menuitem action="qrbook"/>
+        <menu action="qrbook" name="qrbook">
+            <menuitem action="qrbookpolitical"/>
+            <menuitem action="qrbookproximity"/>
+        </menu>
         <menuitem action="qpr"/>
         <menuitem action="qrfinder"/>
       </menu>
@@ -1614,17 +1778,27 @@ of file.
             ('export', None, _("Export"), "%se" % ALT_KEY, None, self.mh),
             ('importsrc', None, _("Import from data source"),
              None, None, self.mh),
+            ('idmrmarc', None, _("DMR-MARC Repeaters"), None, None, self.mh),
             ('iradioreference', None, _("RadioReference.com"),
              None, None, self.mh),
             ('irfinder', None, _("RFinder"), None, None, self.mh),
             ('irbook', None, _("RepeaterBook"), None, None, self.mh),
+            ('irbookpolitical', None, _("RepeaterBook political query"), None,
+             None, self.mh),
+            ('irbookproximity', None, _("RepeaterBook proximity query"), None,
+             None, self.mh),
             ('ipr', None, _("przemienniki.net"), None, None, self.mh),
             ('querysrc', None, _("Query data source"), None, None, self.mh),
+            ('qdmrmarc', None, _("DMR-MARC Repeaters"), None, None, self.mh),
             ('qradioreference', None, _("RadioReference.com"),
              None, None, self.mh),
             ('qrfinder', None, _("RFinder"), None, None, self.mh),
             ('qpr', None, _("przemienniki.net"), None, None, self.mh),
             ('qrbook', None, _("RepeaterBook"), None, None, self.mh),
+            ('qrbookpolitical', None, _("RepeaterBook political query"), None,
+             None, self.mh),
+            ('qrbookproximity', None, _("RepeaterBook proximity query"), None,
+             None, self.mh),
             ('export_chirp', None, _("CHIRP Native File"),
              None, None, self.mh),
             ('export_csv', None, _("CSV File"), None, None, self.mh),
@@ -1636,7 +1810,7 @@ of file.
             ('help', None, _('Help'), None, None, self.mh),
             ('about', gtk.STOCK_ABOUT, None, None, None, self.mh),
             ('gethelp', None, _("Get Help Online..."), None, None, self.mh),
-            ]
+        ]
 
         conf = config.get()
         re = not conf.get_bool("no_report")
@@ -1667,7 +1841,8 @@ of file.
 
         self.add_accel_group(self.menu_uim.get_accel_group())
 
-        self.clonemenu = self.menu_uim.get_widget("/MenuBar/help/clone_instructions")
+        self.clonemenu = self.menu_uim.get_widget(
+            "/MenuBar/help/clone_instructions")
 
         # Initialize
         self.do_toggle_developer(self.menu_ag.get_action("developer"))
@@ -1726,7 +1901,7 @@ of file.
 
         actions = [
             # ("action_name", "key", function)
-            ]
+        ]
 
         for name, key, fn in actions:
             a = gtk.Action(name, name, name, "")
@@ -1736,11 +1911,9 @@ of file.
             a.connect_accelerator()
 
     def _set_icon(self):
-        execpath = platform.get_platform().executable_path()
-        path = os.path.abspath(os.path.join(execpath, "share", "chirp.png"))
-        if not os.path.exists(path):
-            path = "/usr/share/pixmaps/chirp.png"
-
+        this_platform = platform.get_platform()
+        path = (this_platform.find_resource("chirp.png") or
+                this_platform.find_resource(os.path.join("pixmaps", "chirp.png")))
         if os.path.exists(path):
             self.set_icon_from_file(path)
         else:
@@ -1774,12 +1947,32 @@ of file.
         d.destroy()
 
     def _init_macos(self, menu_bar):
+        macapp = None
+
+        # for KK7DS runtime <= R10
         try:
             import gtk_osxapplication
             macapp = gtk_osxapplication.OSXApplication()
-        except ImportError, e:
+        except ImportError:
+            pass
+
+        # for gtk-mac-integration >= 2.0.7
+        try:
+            import gtkosx_application
+            macapp = gtkosx_application.Application()
+        except ImportError:
+            pass
+
+        if macapp is None:
             LOG.error("No MacOS support: %s" % e)
             return
+
+        this_platform = platform.get_platform()
+        icon = (this_platform.find_resource("chirp.png") or
+                this_platform.find_resource(os.path.join("pixmaps", "chirp.png")))
+        if os.path.exists(icon):
+            icon_pixmap = gtk.gdk.pixbuf_new_from_file(icon)
+            macapp.set_dock_icon_pixbuf(icon_pixmap)
 
         menu_bar.hide()
         macapp.set_menu_bar(menu_bar)

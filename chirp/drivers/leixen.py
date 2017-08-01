@@ -129,9 +129,11 @@ struct channel {
   bbcd rx_freq[4];
   bbcd tx_freq[4];
   u8 rx_tone;
-  u8 rx_tmode;
+  u8 rx_tmode_extra:6,
+     rx_tmode:2;
   u8 tx_tone;
-  u8 tx_tmode;
+  u8 tx_tmode_extra:6,
+     tx_tmode:2;
   u8 unknown5;
   u8 pttidoff:1,
      dtmfoff:1,
@@ -154,12 +156,12 @@ struct name {
     u8 pad;
 };
 
-#seekto 0x0d00;
-struct channel default[3];
+#seekto 0x%(chanstart)x;
+struct channel default[%(defaults)i];
 struct channel memory[199];
 
-#seekto 0x19b0;
-struct name defaultname[3];
+#seekto 0x%(namestart)x;
+struct name defaultname[%(defaults)i];
 struct name name[199];
 """
 
@@ -276,7 +278,7 @@ def recv(radio, readdata=True):
         #           util.hexprint(hdr + data).replace("\n", "\n          "))
         if len(data) != length:
             raise errors.RadioError("Radio sent %i bytes (expected %i)" % (
-                    len(data), length))
+                len(data), length))
         chk = radio.pipe.read(1)
     else:
         data = ""
@@ -330,6 +332,7 @@ def do_upload(radio):
     do_ident(radio)
 
     for start, end in _ranges:
+        LOG.debug('Uploading range 0x%04X - 0x%04X' % (start, end))
         for addr in range(start, end, 0x10):
             frame = make_frame("W", addr, radio._mmap[addr:addr + 0x10])
             send(radio, frame)
@@ -362,6 +365,7 @@ class LT898UV(chirp_common.Alias):
 
 @directory.register
 class LeixenVV898Radio(chirp_common.CloneModeRadio):
+
     """Leixen VV-898"""
     VENDOR = "Leixen"
     MODEL = "VV-898"
@@ -383,7 +387,10 @@ class LeixenVV898Radio(chirp_common.CloneModeRadio):
     ]
 
     _mem_formatter = {'unknownormode': 'unknown6:1',
-                      'modeorpower': 'mode:1, power:1'}
+                      'modeorpower': 'mode:1, power:1',
+                      'chanstart': 0x0D00,
+                      'namestart': 0x19B0,
+                      'defaults': 3}
     _power_levels = [chirp_common.PowerLevel("Low", watts=4),
                      chirp_common.PowerLevel("High", watts=10)]
 
@@ -424,7 +431,8 @@ class LeixenVV898Radio(chirp_common.CloneModeRadio):
         self.process_mmap()
 
     def process_mmap(self):
-        self._memobj = bitwise.parse(MEM_FORMAT % self._mem_formatter, self._mmap)
+        self._memobj = bitwise.parse(
+            MEM_FORMAT % self._mem_formatter, self._mmap)
 
     def sync_out(self):
         try:
@@ -436,8 +444,8 @@ class LeixenVV898Radio(chirp_common.CloneModeRadio):
             raise errors.RadioError("Failed to upload to radio: %s" % e)
 
     def get_raw_memory(self, number):
-        return repr(self._memobj.name[number - 1]) + \
-               repr(self._memobj.memory[number - 1])
+        name, mem = self._get_memobjs(number)
+        return repr(name) + repr(mem)
 
     def _get_tone(self, mem, _mem):
         rx_tone = tx_tone = None
@@ -459,7 +467,7 @@ class LeixenVV898Radio(chirp_common.CloneModeRadio):
         rx_pol = _mem.rx_tmode == 0x03 and "R" or "N"
 
         chirp_common.split_tone_decode(mem, (tx_tmode, tx_tone, tx_pol),
-                                            (rx_tmode, rx_tone, rx_pol))
+                                       (rx_tmode, rx_tone, rx_pol))
 
     def _is_txinh(self, _mem):
         raw_tx = ""
@@ -467,9 +475,13 @@ class LeixenVV898Radio(chirp_common.CloneModeRadio):
             raw_tx += _mem.tx_freq[i].get_raw()
         return raw_tx == "\xFF\xFF\xFF\xFF"
 
-    def get_memory(self, number):
+    def _get_memobjs(self, number):
         _mem = self._memobj.memory[number - 1]
         _name = self._memobj.name[number - 1]
+        return _mem, _name
+
+    def get_memory(self, number):
+        _mem, _name = self._get_memobjs(number)
 
         mem = chirp_common.Memory()
         mem.number = number
@@ -571,8 +583,7 @@ class LeixenVV898Radio(chirp_common.CloneModeRadio):
             _mem.rx_tone = DTCS_CODES.index(rxtone) + 1
 
     def set_memory(self, mem):
-        _mem = self._memobj.memory[mem.number - 1]
-        _name = self._memobj.name[mem.number - 1]
+        _mem, _name = self._get_memobjs(mem.number)
 
         if mem.empty:
             _mem.set_raw("\xFF" * 16)
@@ -943,6 +954,7 @@ class LeixenVV898Radio(chirp_common.CloneModeRadio):
 
 @directory.register
 class JetstreamJT270MRadio(LeixenVV898Radio):
+
     """Jetstream JT270M"""
     VENDOR = "Jetstream"
     MODEL = "JT270M"
@@ -951,14 +963,60 @@ class JetstreamJT270MRadio(LeixenVV898Radio):
     _model_ident = 'LX-\x89\x85\x53'
 
 
+@directory.register
+class JetstreamJT270MHRadio(LeixenVV898Radio):
+
+    """Jetstream JT270MH"""
+    VENDOR = "Jetstream"
+    MODEL = "JT270MH"
+
+    _file_ident = "Leixen"
+    _model_ident = 'LX-\x89\x85\x85'
+    _ranges = [(0x0C00, 0x2000)]
+    _mem_formatter = {'unknownormode': 'unknown6:1',
+                      'modeorpower': 'mode:1, power:1',
+                      'chanstart': 0x0C00,
+                      'namestart': 0x1930,
+                      'defaults': 6}
+
+    def get_features(self):
+        rf = super(JetstreamJT270MHRadio, self).get_features()
+        rf.has_sub_devices = self.VARIANT == ''
+        rf.memory_bounds = (1, 99)
+        return rf
+
+    def get_sub_devices(self):
+        return [JetstreamJT270MHRadioA(self._mmap),
+                JetstreamJT270MHRadioB(self._mmap)]
+
+    def _get_memobjs(self, number):
+        number = number * 2 - self._offset
+        _mem = self._memobj.memory[number]
+        _name = self._memobj.name[number]
+        return _mem, _name
+
+
+class JetstreamJT270MHRadioA(JetstreamJT270MHRadio):
+    VARIANT = 'A Band'
+    _offset = 1
+
+
+class JetstreamJT270MHRadioB(JetstreamJT270MHRadio):
+    VARIANT = 'B Band'
+    _offset = 2
+
+
 class VV898E(chirp_common.Alias):
-    '''Leixen has called this radio both 898E and S historically, ident is identical'''
+
+    '''Leixen has called this radio both 898E and S historically, ident is
+    identical'''
     VENDOR = "Leixen"
     MODEL = "VV-898E"
 
 
 @directory.register
 class LeixenVV898SRadio(LeixenVV898Radio):
+
     """Leixen VV-898S, also VV-898E which is identical"""
     VENDOR = "Leixen"
     MODEL = "VV-898S"
@@ -966,7 +1024,10 @@ class LeixenVV898SRadio(LeixenVV898Radio):
 
     _model_ident = 'LX-\x89\x85\x75'
     _mem_formatter = {'unknownormode': 'mode:1',
-                      'modeorpower': 'power:2'}
+                      'modeorpower': 'power:2',
+                      'chanstart': 0x0D00,
+                      'namestart': 0x19B0,
+                      'defaults': 3}
     _power_levels = [chirp_common.PowerLevel("Low", watts=5),
                      chirp_common.PowerLevel("Med", watts=10),
                      chirp_common.PowerLevel("High", watts=25)]

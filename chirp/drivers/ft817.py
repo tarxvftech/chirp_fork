@@ -33,6 +33,7 @@ CMD_ACK = 0x06
 
 @directory.register
 class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
+
     """Yaesu FT-817"""
     BAUD_RATE = 9600
     MODEL = "FT-817"
@@ -357,10 +358,10 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
             moredata = self.pipe.read(2)
             if moredata:
                 raise Exception(
-                        _("Radio sent data after the last awaited block, "
-                            "this happens when the selected model is a non-US "
-                            "but the radio is a US one. "
-                            "Please choose the correct model and try again."))
+                    _("Radio sent data after the last awaited block, "
+                      "this happens when the selected model is a non-US "
+                      "but the radio is a US one. "
+                      "Please choose the correct model and try again."))
 
         LOG.info("Clone completed in %i seconds" % (time.time() - start))
 
@@ -389,7 +390,7 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
                 LOG.debug(util.hexprint(chr(blocks)))
                 LOG.debug(util.hexprint(self.get_mmap()[pos:pos + block]))
                 LOG.debug(util.hexprint(chr(checksum.get_calculated(
-                            self.get_mmap()))))
+                    self.get_mmap()))))
                 self.pipe.write(chr(blocks))
                 self.pipe.write(self.get_mmap()[pos:pos + block])
                 self.pipe.write(chr(checksum.get_calculated(self.get_mmap())))
@@ -584,7 +585,7 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
             if key != "extd_number":
                 if cur_mem.__dict__[key] != mem.__dict__[key]:
                     raise errors.RadioError("Editing field `%s' " % key +
-                                        "is not supported on this channel")
+                                            "is not supported on this channel")
 
         self._set_memory(mem, _mem)
 
@@ -746,7 +747,7 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
         if mem.freq >= lo and mem.freq <= hi:
             if mem.mode != "FM":
                 msgs.append(chirp_common.ValidationError(
-                        "Only FM is supported in this band"))
+                    "Only FM is supported in this band"))
         # TODO check that step is valid in current mode
         return msgs
 
@@ -782,7 +783,7 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
                           RadioSettingValueList(options,
                                                 options[
                                                     _settings.disable_amfm_dial
-                                                    ]))
+                                                ]))
         panel.append(rs)
         rs = RadioSetting("am_mic", "AM mic level",
                           RadioSettingValueInteger(0, 100, _settings.am_mic))
@@ -1007,7 +1008,8 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
         antenna.append(rs)
 
         st = RadioSettingValueString(0, 7, ''.join([self._CALLSIGN_CHARSET[x]
-                                     for x in self._memobj.callsign]))
+                                                   for x in self._memobj.
+                                                   callsign]))
         st.set_charset(self._CALLSIGN_CHARSET)
         rs = RadioSetting("callsign", "Callsign", st)
         cw.append(rs)
@@ -1042,7 +1044,7 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
                           RadioSettingValueList(options,
                                                 options[
                                                     _settings.pwr_meter_mode
-                                                        ]))
+                                                ]))
         panelcontr.append(rs)
         rs = RadioSetting("vox", "Vox",
                           RadioSettingValueBoolean(_settings.vox))
@@ -1084,7 +1086,8 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
                     setting = element.get_name()
                 try:
                     LOG.debug("Setting %s(%s) <= %s" % (setting,
-                              getattr(obj, setting), element.value))
+                                                        getattr(obj, setting),
+                                                        element.value))
                 except AttributeError:
                     LOG.debug("Setting %s <= %s" % (setting, element.value))
                 if setting == "contrast":
@@ -1102,6 +1105,7 @@ class FT817Radio(yaesu_clone.YaesuCloneModeRadio):
 
 @directory.register
 class FT817NDRadio(FT817Radio):
+
     """Yaesu FT-817ND"""
     MODEL = "FT-817ND"
 
@@ -1113,6 +1117,7 @@ class FT817NDRadio(FT817Radio):
 
 @directory.register
 class FT817NDUSRadio(FT817Radio):
+
     """Yaesu FT-817ND (US version)"""
     # seems that radios configured for 5MHz operations send one paket
     # more than others so we have to distinguish sub models
@@ -1130,7 +1135,7 @@ class FT817NDUSRadio(FT817Radio):
         "M-603": -40,
         "M-604": -39,
         "M-605": -38,
-        }
+    }
     LAST_SPECIAL60M_INDEX = -42
 
     SPECIAL_MEMORIES = dict(FT817Radio.SPECIAL_MEMORIES)

@@ -238,10 +238,19 @@ def do_upload(radio):
         radio.pipe.write(frame)
         ack = radio.pipe.read(1)
         if ack != "\x06":
-            raise errors.RadioError("Radio NAK'd block at address 0x%04x" % i)
+            # UV-B5/UV-B6 radios with 27 menus do not support service settings
+            # and will stop ACKing when the upload reaches 0x0F10
+            if i == 0x0F10:
+                # must be a radio with 27 menus detected - stop upload
+                break
+            else:
+                LOG.debug("Radio NAK'd block at address 0x%04x" % i)
+                raise errors.RadioError(
+                    "Radio NAK'd block at address 0x%04x" % i)
+        LOG.debug("Radio ACK'd block at address 0x%04x" % i)
         do_status(radio, "to", i)
 
-DUPLEX = ["", "-", "+", 'off', "split"]
+DUPLEX = ["", "-", "+"]
 UVB5_STEPS = [5.00, 6.25, 10.0, 12.5, 20.0, 25.0]
 CHARSET = "0123456789- ABCDEFGHIJKLMNOPQRSTUVWXYZ/_+*"
 SPECIALS = {
@@ -296,7 +305,7 @@ class BaofengUVB5(chirp_common.CloneModeRadio,
         rf.valid_tmodes = ["", "Tone", "TSQL", "DTCS", "Cross"]
         rf.valid_cross_modes = ["Tone->Tone", "Tone->DTCS", "DTCS->Tone",
                                 "->Tone", "->DTCS", "DTCS->", "DTCS->DTCS"]
-        rf.valid_duplexes = DUPLEX
+        rf.valid_duplexes = DUPLEX + ["split"]
         rf.can_odd_split = True
         rf.valid_skips = ["", "S"]
         rf.valid_characters = CHARSET
@@ -404,10 +413,6 @@ class BaofengUVB5(chirp_common.CloneModeRadio,
         mem.skip = "" if _mem.scanadd else "S"
         mem.power = POWER_LEVELS[_mem.highpower]
 
-        if mem.freq == mem.offset and mem.duplex == "-":
-            mem.duplex = "off"
-            mem.offset = 0
-
         if _nam:
             for char in _nam:
                 try:
@@ -450,10 +455,7 @@ class BaofengUVB5(chirp_common.CloneModeRadio,
 
         _mem.freq = mem.freq / 10
 
-        if mem.duplex == "off":
-            _mem.duplex = DUPLEX.index("-")
-            _mem.offset = _mem.freq
-        elif mem.duplex == "split":
+        if mem.duplex == "split":
             diff = mem.offset - mem.freq
             _mem.duplex = DUPLEX.index("-") if diff < 0 else DUPLEX.index("+")
             _mem.offset = abs(diff) / 10
