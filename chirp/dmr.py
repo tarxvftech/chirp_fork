@@ -67,7 +67,6 @@ class DMRDump( object ):
         with open(dd,"r") as datadump:
             self.dmrmarc = json.load( datadump )
 
-
     @staticmethod
     def parse_offset( offset ):
         duplex = ""
@@ -332,14 +331,6 @@ class DMRContactList( object ):
                 these.append(each)
         return these
 
-    def set( self, selectme, setme):
-        these = self.find( **selectme )
-        for each in these:
-            for k,v in setme.items():
-                print("Setting %s to %s in %s"%(k,v,each))
-                each[k] = v
-
-
     @classmethod
     def from_csv(cls, radio, fh ):
         me = cls()
@@ -403,13 +394,6 @@ class DMRRXGroupList( object ):
             if addthis:
                 these.append( each )
         return these
-        
-    def set( self, selectme, setme):
-        these = self.find( **selectme )
-        for each in these:
-            for k,v in setme.items():
-                print("Setting %s to %s in %s"%(k,v,each))
-                each[k] = v
 
     def __getitem__(self, item):
         return self.gl[item]
