@@ -49,9 +49,10 @@ class DMRMARCRadio(chirp_common.NetworkSourceRadio):
         self._country = country and [x.strip() for x in country.split(",")] \
             or ['']
 
-    def do_fetch(self):
-        fn = tempfile.mktemp(".json")
-        filename, headers = urllib.urlretrieve(self.URL, fn)
+    def do_fetch(self, fn=None):
+        if fn == None:
+            fn = tempfile.mktemp(".json")
+            filename, headers = urllib.urlretrieve(self.URL, fn)
         with open(fn, 'r') as f:
             try:
                 self._repeaters = json.load(f)['repeaters']
